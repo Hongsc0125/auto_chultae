@@ -45,11 +45,11 @@ PASSWORD = "Wkwkd119!!"
 
 LOGIN_URL = "https://gw.metabuild.co.kr/ekp/view/login/userLogin"
 ATTEND_PAGE_URL = "https://gw.metabuild.co.kr/ekp/main/home/homGwMain"
-BUTTON_ID = "#ptlAttendRegist_btn_lvof3"
+PUNCH_OUT_BUTTON_ID = "#ptlAttendRegist_btn_lvof3"
+PUNCH_OUT_BUTTON_ID2 = "#ptlAttendRegist_btn_lvof2"
 PUNCH_IN_BUTTON_ID = "#ptlAttendRegist_btn_attn"
 
-
-def login_and_click_button(button_id, action_name):
+def login_and_click_button(button_ids, action_name):
     start_time = time.time()
     logger.info(f"[{action_name}] 프로세스 시작")
     
@@ -73,20 +73,29 @@ def login_and_click_button(button_id, action_name):
             logger.info(f"[{action_name}] 로그인 성공")
 
             # 2) 리다이렉트된 홈 화면 대기
-            #    - URL이 변경될 때까지
             page.wait_for_url("**/homGwMain", timeout=30000)
             page.wait_for_load_state("networkidle", timeout=30000)
             page.wait_for_selector("td#ptlAttendRegist_punch_in", timeout=30000)
-                
-            # 버튼 클릭 대기 및 실행
-            logger.info(f"[{action_name}] 버튼 대기 중: {button_id}")
-            try:
-                page.wait_for_selector(button_id, timeout=20000, state="visible")
-                logger.info(f"[{action_name}] 버튼을 클릭합니다.")
-                page.click(button_id)
-                logger.info(f"[{action_name}] 버튼 클릭 완료")
-            except Exception as btn_error:
-                logger.error(f"[{action_name}] 버튼 클릭 중 오류 발생: {btn_error}")
+            
+            # 버튼 클릭 시도
+            clicked = False
+            button_ids = button_ids if isinstance(button_ids, list) else [button_ids]
+            
+            for btn_id in button_ids:
+                try:
+                    logger.info(f"[{action_name}] 버튼 대기 중: {btn_id}")
+                    page.wait_for_selector(btn_id, timeout=5000, state="visible")
+                    logger.info(f"[{action_name}] 버튼을 클릭합니다: {btn_id}")
+                    page.click(btn_id)
+                    logger.info(f"[{action_name}] 버튼 클릭 완료: {btn_id}")
+                    clicked = True
+                    break
+                except Exception as btn_error:
+                    logger.warning(f"[{action_name}] 버튼 클릭 실패 ({btn_id}): {str(btn_error)}")
+            
+            if not clicked:
+                error_msg = f"[{action_name}] 사용 가능한 버튼을 찾을 수 없습니다."
+                logger.error(error_msg)
                 # 오류 스크린샷 저장
                 screenshot_dir = "screenshots"
                 if not os.path.exists(screenshot_dir):
@@ -94,7 +103,7 @@ def login_and_click_button(button_id, action_name):
                 screenshot_path = os.path.join(screenshot_dir, f"error_{action_name}_{int(time.time())}.png")
                 page.screenshot(path=screenshot_path, full_page=True)
                 logger.info(f"[{action_name}] 오류 스크린샷 저장됨: {screenshot_path}")
-                raise btn_error
+                raise Exception(error_msg)
 
             # 브라우저 종료 전에 잠시 대기
             time.sleep(2)
@@ -113,16 +122,18 @@ def punch_in():
     logger.info(f"[punch_in] 출근 처리 시작 (랜덤 딜레이: {delay}초)")
     time.sleep(delay)
     logger.info("[punch_in] 딜레이 완료, 출근 처리 진행 중...")
-    login_and_click_button(PUNCH_IN_BUTTON_ID, "punch_in")
+    login_and_click_button([PUNCH_IN_BUTTON_ID], "punch_in")
     logger.info("[punch_in] 출근 처리 완료")
 
-# def punch_out():
-#     delay = random.randint(0, 300)  # 0~5분 랜덤 딜레이
-#     logger.info(f"[punch_out] 퇴근 처리 시작 (랜덤 딜레이: {delay}초)")
-#     time.sleep(delay)
-#     logger.info("[punch_out] 딜레이 완료, 퇴근 처리 진행 중...")
-#     login_and_click_button(BUTTON_ID, "punch_out")
-#     logger.info("[punch_out] 퇴근 처리 완료")
+def punch_out():
+    delay = random.randint(0, 0)  # 0~5분 랜덤 딜레이
+    # delay = random.randint(0, 300)  # 0~5분 랜덤 딜레이
+    logger.info(f"[punch_out] 퇴근 처리 시작 (랜덤 딜레이: {delay}초)")
+    time.sleep(delay)
+    logger.info("[punch_out] 딜레이 완료, 퇴근 처리 진행 중...")
+    # 두 개의 버튼 ID 중 사용 가능한 버튼 클릭 시도
+    login_and_click_button([PUNCH_OUT_BUTTON_ID, PUNCH_OUT_BUTTON_ID2], "punch_out")
+    logger.info("[punch_out] 퇴근 처리 완료")
 
 # 스캐줄러
 def main():
@@ -133,10 +144,10 @@ def main():
         scheduler = BlockingScheduler(timezone="Asia/Seoul")
         # 퇴근 스케줄러 (평일 오후 6시 5분)
         # scheduler.add_job(punch_out, 'cron', hour=18, minute=5, day_of_week='mon-fri')
-        # scheduler.add_job(punch_out, 'cron', minute=1, day_of_week='mon-fri')
+        scheduler.add_job(punch_out, 'cron', minute='*/1')
         # 출근 스케줄러 (평일 오전 8시 50분)
         # scheduler.add_job(punch_in, 'cron', hour=8, minute=50, day_of_week='mon-fri')
-        scheduler.add_job(punch_in, 'cron', minute='*/1')
+        # scheduler.add_job(punch_in, 'cron', minute='*/1')
         
         logger.info("스케줄러가 시작되었습니다.")
         logger.info(" - 출근: 평일 오전 8시 50분 (0~5분 랜덤 딜레이 포함)")
