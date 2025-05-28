@@ -102,13 +102,13 @@ def login_and_click_button(button_id, action_name):
         logger.error(f"[{action_name}] 처리 중 오류 발생 (소요시간: {elapsed_time:.2f}초): {str(e)}", exc_info=True)
         raise
 
-# def punch_in():
-#     delay = random.randint(0, 300)  # 0~5분 랜덤 딜레이
-#     logger.info(f"[punch_in] 출근 처리 시작 (랜덤 딜레이: {delay}초)")
-#     time.sleep(delay)
-#     logger.info("[punch_in] 딜레이 완료, 출근 처리 진행 중...")
-#     login_and_click_button(PUNCH_IN_BUTTON_ID, "punch_in")
-#     logger.info("[punch_in] 출근 처리 완료")
+def punch_in():
+    delay = random.randint(0, 0)  # 0~5분 랜덤 딜레이
+    logger.info(f"[punch_in] 출근 처리 시작 (랜덤 딜레이: {delay}초)")
+    time.sleep(delay)
+    logger.info("[punch_in] 딜레이 완료, 출근 처리 진행 중...")
+    login_and_click_button(PUNCH_IN_BUTTON_ID, "punch_in")
+    logger.info("[punch_in] 출근 처리 완료")
 
 # def punch_out():
 #     delay = random.randint(0, 300)  # 0~5분 랜덤 딜레이
@@ -127,7 +127,7 @@ def main():
         scheduler = BlockingScheduler(timezone="Asia/Seoul")
         # 퇴근 스케줄러 (평일 오후 6시 5분)
         # scheduler.add_job(punch_out, 'cron', hour=18, minute=5, day_of_week='mon-fri')
-        scheduler.add_job(punch_out, 'cron', minute=1, day_of_week='mon-fri')
+        # scheduler.add_job(punch_out, 'cron', minute=1, day_of_week='mon-fri')
         # 출근 스케줄러 (평일 오전 8시 55분)
         # scheduler.add_job(punch_in, 'cron', hour=8, minute=55, day_of_week='mon-fri')
         # scheduler.add_job(punch_in, 'cron', minute=1, day_of_week='mon-fri')
