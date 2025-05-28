@@ -128,12 +128,12 @@ def main():
         # 퇴근 스케줄러 (평일 오후 6시 5분)
         # scheduler.add_job(punch_out, 'cron', hour=18, minute=5, day_of_week='mon-fri')
         # scheduler.add_job(punch_out, 'cron', minute=1, day_of_week='mon-fri')
-        # 출근 스케줄러 (평일 오전 8시 55분)
-        # scheduler.add_job(punch_in, 'cron', hour=8, minute=55, day_of_week='mon-fri')
-        # scheduler.add_job(punch_in, 'cron', minute=1, day_of_week='mon-fri')
+        # 출근 스케줄러 (평일 오전 8시 50분)
+        # scheduler.add_job(punch_in, 'cron', hour=8, minute=50, day_of_week='mon-fri')
+        scheduler.add_job(punch_in, 'cron', minute='*/1')
         
         logger.info("스케줄러가 시작되었습니다.")
-        logger.info(" - 출근: 평일 오전 8시 55분 (0~5분 랜덤 딜레이 포함)")
+        logger.info(" - 출근: 평일 오전 8시 50분 (0~5분 랜덤 딜레이 포함)")
         logger.info(" - 퇴근: 평일 오후 6시 5분 (0~5분 랜덤 딜레이 포함)")
         logger.info("=" * 50)
         
