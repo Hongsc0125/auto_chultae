@@ -66,7 +66,7 @@ def login_and_click_button(button_id, action_name):
             
             logger.info(f"[{action_name}] 로그인 정보 입력 중...")
             page.fill("#userId", USER_ID)
-            page.fill("#password", "*" * len(PASSWORD))  # 비밀번호는 로그에 표시하지 않음
+            page.fill("#password", PASSWORD)
             
             logger.info(f"[{action_name}] 로그인 시도 중...")
             page.click("button[type=submit]")
