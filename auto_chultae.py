@@ -72,6 +72,12 @@ def login_and_click_button(button_id, action_name):
             page.click("button[type=submit]")
             logger.info(f"[{action_name}] 로그인 성공")
 
+            # 2) 리다이렉트된 홈 화면 대기
+            #    - URL이 변경될 때까지
+            page.wait_for_url("**/homGwMain", timeout=30000)
+            page.wait_for_load_state("networkidle", timeout=30000)
+            page.wait_for_selector("td#ptlAttendRegist_punch_in", timeout=30000)
+                
             # 버튼 클릭 대기 및 실행
             logger.info(f"[{action_name}] 버튼 대기 중: {button_id}")
             try:
