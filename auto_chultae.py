@@ -184,6 +184,10 @@ def main():
         logger.info("=" * 50)
         logger.info(f"총 {len(USERS)}명의 사용자에 대한 근태 관리 시스템을 시작합니다.")
         
+        # 프로그램 시작 시 출근 체크
+        logger.info("프로그램 시작 시 출근 체크를 진행합니다.")
+        punch_in()
+        
         scheduler = BlockingScheduler(timezone="Asia/Seoul")
         
         # 퇴근 스케줄러
