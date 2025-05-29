@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import random
 import logging
@@ -203,9 +204,11 @@ def main():
         
         scheduler.start()
     except KeyboardInterrupt:
-        logger.info("사용자에 의해 프로그램이 종료되었습니다.")
+        logger.info("\n사용자에 의해 프로그램이 종료되었습니다.")
+        sys.exit(0)
     except Exception as e:
         logger.error(f"프로그램 실행 중 오류 발생: {str(e)}", exc_info=True)
+        sys.exit(1)
     finally:
         logging.shutdown()
 
