@@ -3,8 +3,10 @@ import sys
 import time
 import random
 import logging
-from datetime import datetime
+from datetime import datetime, time as dt_time
 from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.executors.pool import ThreadPoolExecutor
+from apscheduler.jobstores.memory import MemoryJobStore
 from playwright.sync_api import sync_playwright
 
 # 로깅 설정
@@ -189,8 +191,18 @@ def main():
         logger.info("프로그램 시작 시 출근 체크를 진행합니다.")
         punch_in()
         
-        scheduler = BlockingScheduler(timezone="Asia/Seoul")
-        
+        # 스케줄러 설정
+        scheduler = BlockingScheduler(
+            jobstores={'default': MemoryJobStore()},
+            executors={'default': ThreadPoolExecutor(10)},
+            job_defaults={
+                'coalesce': False,             # 여러 번 누락되면 각각 실행 (True로 하면 하나로 합쳐짐)
+                'max_instances': 5,            # 동시에 실행될 수 있는 최대 인스턴스 수
+                'misfire_grace_time': 3600     # 예약 시간이 지나도 1시간 내면 무조건 실행
+            },
+            timezone="Asia/Seoul"
+        )
+
         # 퇴근 스케줄러
         scheduler.add_job(punch_out, 'cron', hour=18, minute=5, day_of_week='mon-fri')
         # scheduler.add_job(punch_out, 'cron', minute='*/1')
@@ -203,6 +215,7 @@ def main():
         logger.info("=" * 50)
         
         scheduler.start()
+        
     except KeyboardInterrupt:
         logger.info("\n사용자에 의해 프로그램이 종료되었습니다.")
         sys.exit(0)
