@@ -89,13 +89,54 @@ def login_and_click_button(user_id, password, button_ids, action_name):
 
             # 버튼 클릭
             clicked = False
+            
+            # iframe으로 전환
+            try:
+                frame = page.frame_locator("iframe[name='contentsFrame']")
+                logger.info(f"[{user_id}] [{action_name}] iframe으로 전환 시도")
+            except Exception as e:
+                logger.warning(f"[{user_id}] [{action_name}] iframe 전환 실패: {e}"
+                              "메인 페이지에서 시도합니다.")
+                frame = page
+                
+            # 팝업 창이 닫힐 때까지 대기 (최대 5초)
+            try:
+                page.wait_for_selector("div.ui-dialog:not([style*='display: none'])", state="hidden", timeout=5000)
+            except:
+                pass
+                
             # 공통 테이블 로드 대기
-            page.wait_for_selector("td#ptlAttendRegist_punch_in", timeout=30000)
+            try:
+                frame.wait_for_selector("td#ptlAttendRegist_punch_in", timeout=30000)
+            except:
+                frame = page  # iframe이 아닌 경우 메인 페이지에서 시도
+                
             for btn in button_ids:
                 try:
                     logger.info(f"[{user_id}] [{action_name}] 버튼 대기 중: {btn}")
-                    page.wait_for_selector(btn, timeout=5000, state="visible")
-                    page.click(btn)
+                    button = frame.locator(btn).first
+                    button.wait_for(state="visible", timeout=5000)
+                    
+                    # 요소가 보이도록 스크롤
+                    button.scroll_into_view_if_needed()
+                    
+                    # JavaScript로 직접 클릭 시도
+                    page.evaluate('''(selector) => {
+                        const btn = document.querySelector(selector);
+                        if (btn) {
+                            btn.scrollIntoView({behavior: 'smooth', block: 'center'});
+                            btn.dispatchEvent(new MouseEvent('click', {
+                                view: window,
+                                bubbles: true,
+                                cancelable: true
+                            }));
+                            return true;
+                        }
+                        return false;
+                    }''', btn)
+                    
+                    # 일반 클릭도 시도
+                    button.click(delay=100)
                     logger.info(f"[{user_id}] [{action_name}] 버튼 클릭 완료: {btn}")
                     clicked = True
                     break
