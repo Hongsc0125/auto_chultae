@@ -78,6 +78,17 @@ def login_and_click_button(user_id, password, button_ids, action_name):
             page.wait_for_url("**/homGwMain", timeout=30000)
             page.wait_for_load_state("networkidle", timeout=30000)
 
+            # 팝업 닫기
+            try:
+                page.wait_for_selector("#ui-dialog-titlebar-close", timeout=3000, state="visible")
+                page.click("#ui-dialog-titlebar-close")
+                logger.info(f"[{user_id}] [{action_name}] 팝업 닫기 버튼 클릭 완료")
+                # 팝업이 닫힐 때까지 잠시 대기
+                time.sleep(1)
+            except Exception as e:
+                # 버튼이 없으면 그냥 넘어감
+                logger.info(f"[{user_id}] [{action_name}] 팝업 닫기 버튼이 없음, 넘어감: {str(e)}")
+
             # 출근 상태 체크
             if action_name == "punch_in":
                 try:
