@@ -44,8 +44,8 @@ logger = setup_logging()
 
 # 사용자 계정 정보
 USERS = [
-    {"user_id": "hc0125", "password": "Wkwkd119!!"},
-    # {"user_id": "user2", "password": "password2"},
+    {"user_id": "hc0125", "password": "Wkwkd119119!!"},
+    {"user_id": "yumin567", "password": "sunegg0207!!"},
 ]
 
 # 상수 정의
