@@ -158,6 +158,12 @@ def wait_and_click_button(page, button_selector, user_id, action_name, max_attem
             # 버튼이 존재하는지 확인
             page.wait_for_selector(button_selector, timeout=10000, state="attached")
             
+            # 버튼 클릭 전 스크린샷
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            screenshot_path = f"screenshots/{user_id}_{action_name}_before_click_{attempt+1}_{timestamp}.png"
+            page.screenshot(path=screenshot_path)
+            logger.info(f"[{user_id}] [{action_name}] 버튼 클릭 전 스크린샷 저장: {screenshot_path}")
+            
             # 버튼이 보이는지 확인
             if not page.is_visible(button_selector, timeout=5000):
                 logger.warning(f"[{user_id}] [{action_name}] 버튼이 보이지 않음: {button_selector}")
@@ -184,11 +190,27 @@ def wait_and_click_button(page, button_selector, user_id, action_name, max_attem
             
             if success:
                 logger.info(f"[{user_id}] [{action_name}] 버튼 클릭 성공 (JavaScript): {button_selector}")
+                
+                # 버튼 클릭 후 스크린샷
+                time.sleep(2)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                screenshot_path = f"screenshots/{user_id}_{action_name}_after_click_{attempt+1}_{timestamp}.png"
+                page.screenshot(path=screenshot_path)
+                logger.info(f"[{user_id}] [{action_name}] 버튼 클릭 후 스크린샷 저장: {screenshot_path}")
+                
                 return True
             else:
                 # 일반 클릭 시도
                 page.click(button_selector, timeout=5000, force=True)
                 logger.info(f"[{user_id}] [{action_name}] 버튼 클릭 성공 (Playwright): {button_selector}")
+                
+                # 버튼 클릭 후 스크린샷
+                time.sleep(2)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                screenshot_path = f"screenshots/{user_id}_{action_name}_after_click_{attempt+1}_{timestamp}.png"
+                page.screenshot(path=screenshot_path)
+                logger.info(f"[{user_id}] [{action_name}] 버튼 클릭 후 스크린샷 저장: {screenshot_path}")
+                
                 return True
                 
         except Exception as e:
@@ -220,12 +242,17 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                     '--ignore-certificate-errors',
                     '--ignore-ssl-errors',
                     '--proxy-bypass-list=<-loopback>',
-                    '--disable-features=VizDisplayCompositor'
+                    '--disable-features=VizDisplayCompositor',
+                    '--lang=ko-KR',
+                    '--font-render-hinting=none',
+                    '--disable-font-subpixel-positioning'
                 ]
             )
             context = browser.new_context(
                 viewport={'width': 1920, 'height': 1080},
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                locale='ko-KR',
+                timezone_id='Asia/Seoul',
                 proxy=PROXY_CONFIG
             )
             page = context.new_page()
@@ -237,11 +264,24 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 
                 page.fill("#userId", user_id)
                 page.fill("#password", password)
+                
+                # 로그인 폼 작성 후 스크린샷
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                screenshot_path = f"screenshots/{user_id}_{action_name}_login_form_{timestamp}.png"
+                page.screenshot(path=screenshot_path)
+                logger.info(f"[{user_id}] [{action_name}] 로그인 폼 스크린샷 저장: {screenshot_path}")
+                
                 page.click("button[type=submit]")
                 
                 # 로그인 완료 대기
                 page.wait_for_url("**/homGwMain", timeout=120000)
                 page.wait_for_load_state("load", timeout=60000)
+                
+                # 로그인 성공 후 스크린샷
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                screenshot_path = f"screenshots/{user_id}_{action_name}_login_success_{timestamp}.png"
+                page.screenshot(path=screenshot_path)
+                logger.info(f"[{user_id}] [{action_name}] 로그인 성공 스크린샷 저장: {screenshot_path}")
                 
                 logger.info(f"[{user_id}] [{action_name}] 로그인 성공")
                 
