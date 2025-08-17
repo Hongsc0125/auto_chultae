@@ -156,7 +156,7 @@ def wait_and_click_button(page, button_selector, user_id, action_name, max_attem
                 time.sleep(1)
             
             # 버튼이 존재하는지 확인
-            page.wait_for_selector(button_selector, timeout=10000, state="attached")
+            page.wait_for_selector(button_selector, timeout=30000, state="attached")
             
             # 버튼 클릭 전 스크린샷
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -165,7 +165,7 @@ def wait_and_click_button(page, button_selector, user_id, action_name, max_attem
             logger.info(f"[{user_id}] [{action_name}] 버튼 클릭 전 스크린샷 저장: {screenshot_path}")
             
             # 버튼이 보이는지 확인
-            if not page.is_visible(button_selector, timeout=5000):
+            if not page.is_visible(button_selector, timeout=15000):
                 logger.warning(f"[{user_id}] [{action_name}] 버튼이 보이지 않음: {button_selector}")
                 continue
             
@@ -201,7 +201,7 @@ def wait_and_click_button(page, button_selector, user_id, action_name, max_attem
                 return True
             else:
                 # 일반 클릭 시도
-                page.click(button_selector, timeout=5000, force=True)
+                page.click(button_selector, timeout=15000, force=True)
                 logger.info(f"[{user_id}] [{action_name}] 버튼 클릭 성공 (Playwright): {button_selector}")
                 
                 # 버튼 클릭 후 스크린샷
@@ -260,7 +260,7 @@ def login_and_click_button(user_id, password, button_ids, action_name):
             try:
                 # 로그인
                 logger.info(f"[{user_id}] [{action_name}] 로그인 페이지로 이동: {LOGIN_URL}")
-                page.goto(LOGIN_URL, timeout=120000, wait_until="load")
+                page.goto(LOGIN_URL, timeout=180000, wait_until="load")
                 
                 page.fill("#userId", user_id)
                 page.fill("#password", password)
@@ -274,8 +274,8 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 page.click("button[type=submit]")
                 
                 # 로그인 완료 대기
-                page.wait_for_url("**/homGwMain", timeout=120000)
-                page.wait_for_load_state("load", timeout=60000)
+                page.wait_for_url("**/homGwMain", timeout=180000)
+                page.wait_for_load_state("load", timeout=120000)
                 
                 # 로그인 성공 후 스크린샷
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -324,8 +324,8 @@ def login_and_click_button(user_id, password, button_ids, action_name):
 
             # 근태 관리 테이블 로드 대기
             try:
-                page.wait_for_selector("table", timeout=15000)
-                page.wait_for_selector("td#ptlAttendRegist_punch_in", timeout=15000)
+                page.wait_for_selector("table", timeout=45000)
+                page.wait_for_selector("td#ptlAttendRegist_punch_in", timeout=45000)
                 logger.info(f"[{user_id}] [{action_name}] 근태 관리 테이블 로드 완료")
             except Exception as e:
                 logger.warning(f"[{user_id}] [{action_name}] 테이블 로드 대기 실패: {e}")
