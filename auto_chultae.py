@@ -158,11 +158,6 @@ def wait_and_click_button(page, button_selector, user_id, action_name, max_attem
             # 버튼이 존재하는지 확인
             page.wait_for_selector(button_selector, timeout=30000, state="attached")
             
-            # 버튼 클릭 전 스크린샷
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            screenshot_path = f"screenshots/{user_id}_{action_name}_before_click_{attempt+1}_{timestamp}.png"
-            page.screenshot(path=screenshot_path)
-            logger.info(f"[{user_id}] [{action_name}] 버튼 클릭 전 스크린샷 저장: {screenshot_path}")
             
             # 버튼이 보이는지 확인
             if not page.is_visible(button_selector, timeout=15000):
@@ -190,27 +185,11 @@ def wait_and_click_button(page, button_selector, user_id, action_name, max_attem
             
             if success:
                 logger.info(f"[{user_id}] [{action_name}] 버튼 클릭 성공 (JavaScript): {button_selector}")
-                
-                # 버튼 클릭 후 스크린샷
-                time.sleep(2)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                screenshot_path = f"screenshots/{user_id}_{action_name}_after_click_{attempt+1}_{timestamp}.png"
-                page.screenshot(path=screenshot_path)
-                logger.info(f"[{user_id}] [{action_name}] 버튼 클릭 후 스크린샷 저장: {screenshot_path}")
-                
                 return True
             else:
                 # 일반 클릭 시도
                 page.click(button_selector, timeout=15000, force=True)
                 logger.info(f"[{user_id}] [{action_name}] 버튼 클릭 성공 (Playwright): {button_selector}")
-                
-                # 버튼 클릭 후 스크린샷
-                time.sleep(2)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                screenshot_path = f"screenshots/{user_id}_{action_name}_after_click_{attempt+1}_{timestamp}.png"
-                page.screenshot(path=screenshot_path)
-                logger.info(f"[{user_id}] [{action_name}] 버튼 클릭 후 스크린샷 저장: {screenshot_path}")
-                
                 return True
                 
         except Exception as e:
@@ -265,11 +244,6 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 page.fill("#userId", user_id)
                 page.fill("#password", password)
                 
-                # 로그인 폼 작성 후 스크린샷
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                screenshot_path = f"screenshots/{user_id}_{action_name}_login_form_{timestamp}.png"
-                page.screenshot(path=screenshot_path)
-                logger.info(f"[{user_id}] [{action_name}] 로그인 폼 스크린샷 저장: {screenshot_path}")
                 
                 page.click("button[type=submit]")
                 
@@ -277,11 +251,6 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 page.wait_for_url("**/homGwMain", timeout=180000)
                 page.wait_for_load_state("load", timeout=120000)
                 
-                # 로그인 성공 후 스크린샷
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                screenshot_path = f"screenshots/{user_id}_{action_name}_login_success_{timestamp}.png"
-                page.screenshot(path=screenshot_path)
-                logger.info(f"[{user_id}] [{action_name}] 로그인 성공 스크린샷 저장: {screenshot_path}")
                 
                 logger.info(f"[{user_id}] [{action_name}] 로그인 성공")
                 
