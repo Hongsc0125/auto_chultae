@@ -8,6 +8,12 @@ This is an **automated attendance management system** that uses Playwright to au
 
 ## Running the Application
 
+### Install Dependencies
+```bash
+pip install -r requirements.txt
+playwright install chromium
+```
+
 ### Start the Attendance System
 ```bash
 python auto_chultae.py
@@ -17,14 +23,15 @@ The system will:
 - Schedule automated punch-in at 8:00 AM (Monday-Friday)
 - Schedule automated punch-out at 6:05 PM (Monday-Friday)
 
-### Install Dependencies
-```bash
-pip install -r requirements.txt
+### Environment Configuration
+Create a `.env` file with:
 ```
-
-Note: After installing Playwright, you may need to install browser dependencies:
-```bash
-playwright install chromium
+USERS=user1:password1,user2:password2
+LOGIN_URL=https://gw.metabuild.co.kr/ekp/view/login/userLogin
+ATTEND_PAGE_URL=https://gw.metabuild.co.kr/ekp/main/home/homGwMain
+PROXY_SERVER=optional_proxy_server
+PROXY_USERNAME=optional_proxy_username
+PROXY_PASSWORD=optional_proxy_password
 ```
 
 ## Core Architecture
@@ -68,3 +75,22 @@ playwright install chromium
 - **Button Visibility**: JavaScript-based scrolling and visibility checks  
 - **Duplicate Action Prevention**: State checking to avoid redundant operations
 - **Random Delays**: Anti-detection delays between user processing
+
+## Development Commands
+
+### Debug Mode
+To troubleshoot issues, check the following directories:
+- `logs/` - Daily log files with timestamp format `auto_chultae_YYYYMMDD.log`
+- `screenshots/` - Error screenshots and HTML dumps for failed operations
+
+### Testing Changes
+When modifying the automation logic:
+1. Test with a single user first by temporarily reducing the `USERS` list
+2. Monitor logs for proper login and button detection
+3. Check screenshot outputs if automation fails
+
+### Key Configuration Points
+- **Button Selectors**: `auto_chultae.py:68-69` defines punch-in/out button selectors
+- **URLs**: `auto_chultae.py:66-67` defines login and attendance page URLs  
+- **Scheduling**: `auto_chultae.py:405-406` sets punch times (8:00 AM in, 6:05 PM out)
+- **Browser Options**: `auto_chultae.py:211-225` configures Playwright browser settings

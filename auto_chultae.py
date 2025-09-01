@@ -209,6 +209,8 @@ def login_and_click_button(user_id, password, button_ids, action_name):
     
     try:
         with sync_playwright() as p:
+            logger.info(f"[{user_id}] [{action_name}] Playwright 초기화 완료")
+            logger.info(f"[{user_id}] [{action_name}] 브라우저 실행 시작...")
             browser = p.chromium.launch(
                 headless=True,
                 args=[
@@ -227,6 +229,8 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                     '--disable-font-subpixel-positioning'
                 ]
             )
+            logger.info(f"[{user_id}] [{action_name}] 브라우저 실행 완료")
+            logger.info(f"[{user_id}] [{action_name}] 브라우저 컨텍스트 생성 시작...")
             context = browser.new_context(
                 viewport={'width': 1920, 'height': 1080},
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -234,23 +238,38 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 timezone_id='Asia/Seoul',
                 proxy=PROXY_CONFIG
             )
+            logger.info(f"[{user_id}] [{action_name}] 브라우저 컨텍스트 생성 완료")
+            logger.info(f"[{user_id}] [{action_name}] 새 페이지 생성...")
             page = context.new_page()
+            logger.info(f"[{user_id}] [{action_name}] 페이지 생성 완료")
             
             try:
                 # 로그인
                 logger.info(f"[{user_id}] [{action_name}] 로그인 페이지로 이동: {LOGIN_URL}")
+                logger.info(f"[{user_id}] [{action_name}] 페이지 이동 시작...")
                 page.goto(LOGIN_URL, timeout=180000, wait_until="load")
+                logger.info(f"[{user_id}] [{action_name}] 페이지 이동 완료")
                 
+                logger.info(f"[{user_id}] [{action_name}] 아이디 입력 시작...")
                 page.fill("#userId", user_id)
+                logger.info(f"[{user_id}] [{action_name}] 아이디 입력 완료")
+                
+                logger.info(f"[{user_id}] [{action_name}] 비밀번호 입력 시작...")
                 page.fill("#password", password)
+                logger.info(f"[{user_id}] [{action_name}] 비밀번호 입력 완료")
                 
-                
+                logger.info(f"[{user_id}] [{action_name}] 로그인 버튼 클릭 시작...")
                 page.click("button[type=submit]")
+                logger.info(f"[{user_id}] [{action_name}] 로그인 버튼 클릭 완료")
                 
                 # 로그인 완료 대기
+                logger.info(f"[{user_id}] [{action_name}] 메인 페이지 이동 대기 중...")
                 page.wait_for_url("**/homGwMain", timeout=180000)
-                page.wait_for_load_state("load", timeout=120000)
+                logger.info(f"[{user_id}] [{action_name}] 메인 페이지 이동 완료")
                 
+                logger.info(f"[{user_id}] [{action_name}] 페이지 로드 상태 대기 중...")
+                page.wait_for_load_state("load", timeout=120000)
+                logger.info(f"[{user_id}] [{action_name}] 페이지 로드 완료")
                 
                 logger.info(f"[{user_id}] [{action_name}] 로그인 성공")
                 
