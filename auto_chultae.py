@@ -240,8 +240,33 @@ def login_and_click_button(user_id, password, button_ids, action_name):
             )
             logger.info(f"[{user_id}] [{action_name}] 브라우저 컨텍스트 생성 완료")
             logger.info(f"[{user_id}] [{action_name}] 새 페이지 생성...")
-            page = context.new_page()
-            logger.info(f"[{user_id}] [{action_name}] 페이지 생성 완료")
+            page_created = False
+            for attempt in range(3):
+                try:
+                    import signal
+                    
+                    def timeout_handler(signum, frame):
+                        raise TimeoutError("페이지 생성 타임아웃")
+                    
+                    signal.signal(signal.SIGALRM, timeout_handler)
+                    signal.alarm(30)  # 30초 타임아웃
+                    
+                    page = context.new_page()
+                    signal.alarm(0)  # 타임아웃 해제
+                    page_created = True
+                    logger.info(f"[{user_id}] [{action_name}] 페이지 생성 완료")
+                    break
+                except Exception as e:
+                    signal.alarm(0)  # 타임아웃 해제
+                    logger.warning(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1}/3 실패: {e}")
+                    if attempt < 2:
+                        time.sleep(2)
+                        continue
+                    else:
+                        raise
+            
+            if not page_created:
+                raise Exception("페이지 생성 최대 재시도 횟수 초과")
             
             try:
                 # 로그인
