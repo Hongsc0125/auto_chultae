@@ -20,6 +20,17 @@ fi
 # 로그 디렉토리 생성
 mkdir -p logs
 
+# 가상환경 활성화 확인
+if [ -d ".venv" ]; then
+    echo "가상환경 활성화 중..."
+    source .venv/bin/activate
+elif [ -d "venv" ]; then
+    echo "가상환경 활성화 중..."
+    source venv/bin/activate
+else
+    echo "가상환경을 찾을 수 없습니다. 시스템 Python을 사용합니다."
+fi
+
 # nohup으로 백그라운드 실행
 nohup python3 auto_chultae.py > logs/nohup.out 2>&1 &
 
