@@ -32,7 +32,7 @@ else
 fi
 
 # nohup으로 백그라운드 실행
-nohup python3 auto_chultae.py > logs/nohup.out 2>&1 &
+nohup python3 auto_chultae.py > nohup.out 2>&1 &
 
 # PID 저장
 echo $! > auto_chultae.pid
