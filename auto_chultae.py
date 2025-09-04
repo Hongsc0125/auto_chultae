@@ -8,7 +8,6 @@ import json
 from datetime import datetime, time as dt_time
 from dotenv import load_dotenv
 from apscheduler.schedulers.blocking import BlockingScheduler
-from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.jobstores.memory import MemoryJobStore
 from playwright.sync_api import sync_playwright
 
@@ -239,34 +238,49 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 proxy=PROXY_CONFIG
             )
             logger.info(f"[{user_id}] [{action_name}] 브라우저 컨텍스트 생성 완료")
+            
+            # 컨텍스트 타임아웃 설정
+            context.set_default_timeout(180000)  # 180초 타임아웃
+            context.set_default_navigation_timeout(180000)  # 네비게이션 180초 타임아웃
+            
             logger.info(f"[{user_id}] [{action_name}] 새 페이지 생성...")
             page_created = False
-            for attempt in range(3):
+            for attempt in range(5):  # 최대 5번 시도
                 try:
-                    import signal
-                    
-                    def timeout_handler(signum, frame):
-                        raise TimeoutError("페이지 생성 타임아웃")
-                    
-                    signal.signal(signal.SIGALRM, timeout_handler)
-                    signal.alarm(30)  # 30초 타임아웃
-                    
+                    logger.info(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1}/5")
                     page = context.new_page()
-                    signal.alarm(0)  # 타임아웃 해제
                     page_created = True
                     logger.info(f"[{user_id}] [{action_name}] 페이지 생성 완료")
                     break
                 except Exception as e:
-                    signal.alarm(0)  # 타임아웃 해제
-                    logger.warning(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1}/3 실패: {e}")
-                    if attempt < 2:
-                        time.sleep(2)
+                    logger.warning(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1}/5 실패: {e}")
+                    if attempt < 4:  # 마지막 시도가 아니면 대기 후 재시도
+                        logger.info(f"[{user_id}] [{action_name}] 3초 대기 후 재시도...")
+                        time.sleep(3)
+                        
+                        # 컨텍스트를 새로 만들어서 재시도
+                        if attempt >= 2:  # 3번째 시도부터는 컨텍스트 재생성
+                            try:
+                                logger.info(f"[{user_id}] [{action_name}] 컨텍스트 재생성 시도")
+                                context.close()
+                                context = browser.new_context(
+                                    viewport={'width': 1920, 'height': 1080},
+                                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                                    locale='ko-KR',
+                                    timezone_id='Asia/Seoul',
+                                    proxy=PROXY_CONFIG
+                                )
+                                context.set_default_timeout(180000)
+                                context.set_default_navigation_timeout(180000)
+                                logger.info(f"[{user_id}] [{action_name}] 컨텍스트 재생성 완료")
+                            except Exception as ctx_err:
+                                logger.warning(f"[{user_id}] [{action_name}] 컨텍스트 재생성 실패: {ctx_err}")
                         continue
                     else:
-                        raise
+                        raise Exception(f"페이지 생성 최대 재시도 횟수 초과: {e}")
             
             if not page_created:
-                raise Exception("페이지 생성 최대 재시도 횟수 초과")
+                raise Exception("페이지 생성에 실패했습니다")
             
             try:
                 # 로그인
@@ -308,32 +322,6 @@ def login_and_click_button(user_id, password, button_ids, action_name):
             # 모든 팝업 닫기
             close_all_popups(page, user_id, action_name)
             time.sleep(2)
-
-            # 출근 상태 미리 체크 (출근인 경우)
-            # if action_name == "punch_in":
-            #     try:
-            #         # 이미 출근한 상태인지 확인
-            #         already_punched = page.evaluate("""() => {
-            #             const punchDiv = document.querySelector('div.div_punch');
-            #             const punchText = document.querySelector('td#ptlAttendRegist_punch_in');
-                        
-            #             if (punchDiv && punchDiv.style.display !== 'none') {
-            #                 return true;
-            #             }
-                        
-            #             if (punchText && punchText.textContent && punchText.textContent.trim() !== '') {
-            #                 return true;
-            #             }
-                        
-            #             return false;
-            #         }""")
-                    
-            #         if already_punched:
-            #             logger.info(f"[{user_id}] [{action_name}] 이미 출근 완료 상태입니다.")
-            #             return
-                        
-            #     except Exception as e:
-            #         logger.debug(f"[{user_id}] [{action_name}] 출근 상태 체크 중 오류: {e}")
 
             # 근태 관리 테이블 로드 대기
             try:
@@ -447,10 +435,9 @@ def main():
 
     scheduler = BlockingScheduler(
         jobstores={'default': MemoryJobStore()},
-        executors={'default': ThreadPoolExecutor(10)},
         job_defaults={
             'coalesce': False,
-            'max_instances': 5,
+            'max_instances': 1,
             'misfire_grace_time': 3600
         },
         timezone="Asia/Seoul"
