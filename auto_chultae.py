@@ -240,8 +240,8 @@ def login_and_click_button(user_id, password, button_ids, action_name):
             logger.info(f"[{user_id}] [{action_name}] 브라우저 컨텍스트 생성 완료")
             
             # 컨텍스트 타임아웃 설정
-            context.set_default_timeout(180000)  # 180초 타임아웃
-            context.set_default_navigation_timeout(180000)  # 네비게이션 180초 타임아웃
+            context.set_default_timeout(600000)  # 600초 타임아웃
+            context.set_default_navigation_timeout(600000)  # 네비게이션 600초 타임아웃
             
             logger.info(f"[{user_id}] [{action_name}] 새 페이지 생성...")
             page_created = False
@@ -285,8 +285,8 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                                     timezone_id='Asia/Seoul',
                                     proxy=PROXY_CONFIG
                                 )
-                                context.set_default_timeout(180000)
-                                context.set_default_navigation_timeout(180000)
+                                context.set_default_timeout(600000)
+                                context.set_default_navigation_timeout(600000)
                                 logger.info(f"[{user_id}] [{action_name}] 컨텍스트 재생성 완료")
                             except Exception as ctx_err:
                                 logger.warning(f"[{user_id}] [{action_name}] 컨텍스트 재생성 실패: {ctx_err}")
