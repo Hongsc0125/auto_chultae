@@ -301,7 +301,7 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 # 로그인
                 logger.info(f"[{user_id}] [{action_name}] 로그인 페이지로 이동: {LOGIN_URL}")
                 logger.info(f"[{user_id}] [{action_name}] 페이지 이동 시작...")
-                page.goto(LOGIN_URL, timeout=180000, wait_until="load")
+                page.goto(LOGIN_URL, timeout=600000, wait_until="load")
                 logger.info(f"[{user_id}] [{action_name}] 페이지 이동 완료")
                 
                 logger.info(f"[{user_id}] [{action_name}] 아이디 입력 시작...")
@@ -318,11 +318,11 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 
                 # 로그인 완료 대기
                 logger.info(f"[{user_id}] [{action_name}] 메인 페이지 이동 대기 중...")
-                page.wait_for_url("**/homGwMain", timeout=180000)
+                page.wait_for_url("**/homGwMain", timeout=600000)
                 logger.info(f"[{user_id}] [{action_name}] 메인 페이지 이동 완료")
                 
                 logger.info(f"[{user_id}] [{action_name}] 페이지 로드 상태 대기 중...")
-                page.wait_for_load_state("load", timeout=120000)
+                page.wait_for_load_state("load", timeout=600000)
                 logger.info(f"[{user_id}] [{action_name}] 페이지 로드 완료")
                 
                 logger.info(f"[{user_id}] [{action_name}] 로그인 성공")
