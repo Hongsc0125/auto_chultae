@@ -17,15 +17,12 @@ load_dotenv()
 # 전역 스케줄러 선언 (signal 핸들러에서 접근하기 위해)
 scheduler = None
 
-# 종료 시그널 핸들러
+# 종료 시그널 핸들러 (메인 스레드에서만 사용)
 def shutdown_handler(signum, frame):
     logging.getLogger('auto_chultae').info("종료 신호를 수신했습니다. 스케줄러 종료 중...")
     if scheduler:
         scheduler.shutdown(wait=True)
     sys.exit(0)
-
-signal.signal(signal.SIGINT, shutdown_handler)   # Ctrl+C
-signal.signal(signal.SIGTERM, shutdown_handler)  # kill
 
 # 로깅 설정
 def setup_logging():
@@ -249,24 +246,11 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 try:
                     logger.info(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1}/5")
                     
-                    # 페이지 생성에 강제 타임아웃 적용 (30초)
-                    import signal
-                    
-                    def timeout_handler(signum, frame):
-                        raise TimeoutError("페이지 생성 30초 타임아웃")
-                    
-                    signal.signal(signal.SIGALRM, timeout_handler)
-                    signal.alarm(30)  # 30초 타임아웃
-                    
-                    try:
-                        page = context.new_page()
-                        signal.alarm(0)  # 타임아웃 해제
-                        page_created = True
-                        logger.info(f"[{user_id}] [{action_name}] 페이지 생성 완료")
-                        break
-                    except TimeoutError as te:
-                        signal.alarm(0)  # 타임아웃 해제
-                        raise te
+                    # 페이지 생성 (시그널 타임아웃 제거, Playwright 자체 타임아웃 사용)
+                    page = context.new_page()
+                    page_created = True
+                    logger.info(f"[{user_id}] [{action_name}] 페이지 생성 완료")
+                    break
                 except Exception as e:
                     logger.warning(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1}/5 실패: {e}")
                     if attempt < 4:  # 마지막 시도가 아니면 대기 후 재시도
@@ -319,23 +303,13 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 # 로그인 완료 대기
                 logger.info(f"[{user_id}] [{action_name}] 메인 페이지 이동 대기 중...")
                 
-                # wait_for_url에 강제 타임아웃 적용
-                import signal
-                
-                def url_timeout_handler(signum, frame):
-                    raise TimeoutError("메인 페이지 이동 120초 타임아웃")
-                
-                signal.signal(signal.SIGALRM, url_timeout_handler)
-                signal.alarm(120)  # 120초 타임아웃
-                
+                # 메인 페이지 이동 대기 (Playwright 자체 타임아웃 사용)
                 try:
-                    page.wait_for_url("**/homGwMain", timeout=600000)
-                    signal.alarm(0)  # 타임아웃 해제
+                    page.wait_for_url("**/homGwMain", timeout=120000)  # 120초 타임아웃
                     logger.info(f"[{user_id}] [{action_name}] 메인 페이지 이동 완료")
-                except TimeoutError as te:
-                    signal.alarm(0)  # 타임아웃 해제
-                    logger.error(f"[{user_id}] [{action_name}] 메인 페이지 이동 강제 타임아웃: {te}")
-                    raise te
+                except Exception as e:
+                    logger.error(f"[{user_id}] [{action_name}] 메인 페이지 이동 타임아웃: {e}")
+                    raise e
                 
                 logger.info(f"[{user_id}] [{action_name}] 페이지 로드 상태 대기 중...")
                 page.wait_for_load_state("load", timeout=600000)
@@ -458,6 +432,10 @@ def punch_out():
 
 def main():
     global scheduler
+    
+    # 메인 스레드에서만 시그널 핸들러 등록
+    signal.signal(signal.SIGINT, shutdown_handler)   # Ctrl+C
+    signal.signal(signal.SIGTERM, shutdown_handler)  # kill
 
     logger.info("=" * 50)
     logger.info("근태 관리 시스템 시작")
