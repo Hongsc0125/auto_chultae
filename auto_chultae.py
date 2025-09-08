@@ -318,8 +318,24 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 
                 # 로그인 완료 대기
                 logger.info(f"[{user_id}] [{action_name}] 메인 페이지 이동 대기 중...")
-                page.wait_for_url("**/homGwMain", timeout=600000)
-                logger.info(f"[{user_id}] [{action_name}] 메인 페이지 이동 완료")
+                
+                # wait_for_url에 강제 타임아웃 적용
+                import signal
+                
+                def url_timeout_handler(signum, frame):
+                    raise TimeoutError("메인 페이지 이동 120초 타임아웃")
+                
+                signal.signal(signal.SIGALRM, url_timeout_handler)
+                signal.alarm(120)  # 120초 타임아웃
+                
+                try:
+                    page.wait_for_url("**/homGwMain", timeout=600000)
+                    signal.alarm(0)  # 타임아웃 해제
+                    logger.info(f"[{user_id}] [{action_name}] 메인 페이지 이동 완료")
+                except TimeoutError as te:
+                    signal.alarm(0)  # 타임아웃 해제
+                    logger.error(f"[{user_id}] [{action_name}] 메인 페이지 이동 강제 타임아웃: {te}")
+                    raise te
                 
                 logger.info(f"[{user_id}] [{action_name}] 페이지 로드 상태 대기 중...")
                 page.wait_for_load_state("load", timeout=600000)
