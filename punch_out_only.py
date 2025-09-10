@@ -3,7 +3,6 @@ import sys
 import time
 import random
 import logging
-import threading
 from datetime import datetime
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
@@ -227,33 +226,16 @@ def login_and_click_button(user_id, password, button_ids, action_name):
             
             logger.info(f"[{user_id}] [{action_name}] 새 페이지 생성...")
             page_created = False
-            page = None
-            
-            def create_page_with_timeout():
-                nonlocal page, page_created
-                try:
-                    page = context.new_page()
-                    page_created = True
-                except Exception as e:
-                    logger.error(f"[{user_id}] [{action_name}] 페이지 생성 스레드 오류: {e}")
             
             for attempt in range(5):  # 최대 5번 시도
                 try:
                     logger.info(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1}/5")
                     
-                    # 스레드에서 페이지 생성 (30초 타임아웃)
-                    page_created = False
-                    page = None
-                    thread = threading.Thread(target=create_page_with_timeout)
-                    thread.daemon = True
-                    thread.start()
-                    thread.join(timeout=30)  # 30초 타임아웃
-                    
-                    if page_created and page:
-                        logger.info(f"[{user_id}] [{action_name}] 페이지 생성 완료")
-                        break
-                    else:
-                        raise Exception("페이지 생성 30초 타임아웃")
+                    # 페이지 생성 (Playwright 기본 동작 사용)
+                    page = context.new_page()
+                    page_created = True
+                    logger.info(f"[{user_id}] [{action_name}] 페이지 생성 완료")
+                    break
                 except Exception as e:
                     logger.warning(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1}/5 실패: {e}")
                     if attempt < 4:  # 마지막 시도가 아니면 대기 후 재시도
