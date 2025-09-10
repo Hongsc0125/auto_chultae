@@ -3,34 +3,20 @@ import sys
 import time
 import random
 import logging
-import signal
-import json
 import threading
-from datetime import datetime, time as dt_time
+from datetime import datetime
 from dotenv import load_dotenv
-from apscheduler.schedulers.blocking import BlockingScheduler
-from apscheduler.jobstores.memory import MemoryJobStore
 from playwright.sync_api import sync_playwright
 
 # .env 파일 로드
 load_dotenv()
 
-# 전역 스케줄러 선언 (signal 핸들러에서 접근하기 위해)
-scheduler = None
-
-# 종료 시그널 핸들러 (메인 스레드에서만 사용)
-def shutdown_handler(signum, frame):
-    logging.getLogger('auto_chultae').info("종료 신호를 수신했습니다. 스케줄러 종료 중...")
-    if scheduler:
-        scheduler.shutdown(wait=True)
-    sys.exit(0)
-
 # 로깅 설정
 def setup_logging():
     log_dir = "logs"
     os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, f"auto_chultae_{datetime.now().strftime('%Y%m%d')}.log")
-    logger = logging.getLogger('auto_chultae')
+    log_file = os.path.join(log_dir, f"punch_out_only_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    logger = logging.getLogger('punch_out_only')
     logger.setLevel(logging.INFO)
     fmt = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     file_handler = logging.FileHandler(log_file, encoding='utf-8')
@@ -60,9 +46,8 @@ PROXY_CONFIG = {
 }
 
 # 상수 정의
-LOGIN_URL            = os.getenv("LOGIN_URL", "https://gw.metabuild.co.kr/ekp/view/login/userLogin")
-ATTEND_PAGE_URL      = os.getenv("ATTEND_PAGE_URL", "https://gw.metabuild.co.kr/ekp/main/home/homGwMain")
-PUNCH_IN_BUTTON_ID   = "#ptlAttendRegist_btn_attn"
+LOGIN_URL = os.getenv("LOGIN_URL", "https://gw.metabuild.co.kr/ekp/view/login/userLogin")
+ATTEND_PAGE_URL = os.getenv("ATTEND_PAGE_URL", "https://gw.metabuild.co.kr/ekp/main/home/homGwMain")
 PUNCH_OUT_BUTTON_IDS = ["#ptlAttendRegist_btn_lvof3", "#ptlAttendRegist_btn_lvof2"]
 
 def close_all_popups(page, user_id, action_name):
@@ -154,7 +139,6 @@ def wait_and_click_button(page, button_selector, user_id, action_name, max_attem
             
             # 버튼이 존재하는지 확인
             page.wait_for_selector(button_selector, timeout=30000, state="attached")
-            
             
             # 버튼이 보이는지 확인
             if not page.is_visible(button_selector, timeout=15000):
@@ -363,32 +347,6 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                     break
 
             if not clicked:
-                # 마지막으로 이미 처리된 상태인지 다시 확인
-                if action_name == "punch_in":
-                    try:
-                        already_done = page.evaluate("""() => {
-                            const indicators = [
-                                'div.div_punch',
-                                'td#ptlAttendRegist_punch_in',
-                                '.attendance-complete',
-                                '[class*="punch"]'
-                            ];
-                            
-                            return indicators.some(selector => {
-                                const el = document.querySelector(selector);
-                                return el && (
-                                    el.style.display !== 'none' || 
-                                    (el.textContent && el.textContent.trim() !== '')
-                                );
-                            });
-                        }""")
-                        
-                        if already_done:
-                            logger.info(f"[{user_id}] [{action_name}] 이미 처리 완료된 상태로 확인됨")
-                            return
-                    except:
-                        pass
-
                 # 스크린샷 저장
                 error_msg = f"[{user_id}] [{action_name}] 사용할 수 있는 버튼을 찾을 수 없습니다."
                 logger.error(error_msg)
@@ -423,58 +381,29 @@ def login_and_click_button(user_id, password, button_ids, action_name):
         except:
             pass
 
-def process_users(button_ids, action_name):
+def process_users():
     for u in USERS:
-        uid = u["user_id"]; pwd = u["password"]
-        logger.info(f"=== 사용자 처리 시작: {uid}, 작업: {action_name} ===")
+        uid = u["user_id"]
+        pwd = u["password"]
+        logger.info(f"=== 사용자 처리 시작: {uid}, 작업: punch_out ===")
         try:
             delay = random.randint(0, 60)
-            logger.info(f"[{uid}] [{action_name}] 랜덤 딜레이: {delay}s")
+            logger.info(f"[{uid}] [punch_out] 랜덤 딜레이: {delay}s")
             time.sleep(delay)
-            login_and_click_button(uid, pwd, button_ids, action_name)
+            login_and_click_button(uid, pwd, PUNCH_OUT_BUTTON_IDS, "punch_out")
         except Exception as e:
-            if "이미 출근 완료" in str(e) or "이미 처리 완료" in str(e):
-                logger.info(f"[{uid}] [{action_name}] {e}")
+            if "이미 처리 완료" in str(e):
+                logger.info(f"[{uid}] [punch_out] {e}")
             else:
-                logger.error(f"[{uid}] [{action_name}] 처리 중 오류: {e}")
+                logger.error(f"[{uid}] [punch_out] 처리 중 오류: {e}")
         logger.info(f"=== {uid} 처리 완료 ===\n")
 
-def punch_in():
-    logger.info("===== 출근 처리 시작 =====")
-    process_users([PUNCH_IN_BUTTON_ID], "punch_in")
-    logger.info("===== 출근 처리 완료 =====")
-
-def punch_out():
-    logger.info("===== 퇴근 처리 시작 =====")
-    process_users(PUNCH_OUT_BUTTON_IDS, "punch_out")
-    logger.info("===== 퇴근 처리 완료 =====")
-
 def main():
-    global scheduler
-    
-    # 메인 스레드에서만 시그널 핸들러 등록
-    signal.signal(signal.SIGINT, shutdown_handler)   # Ctrl+C
-    signal.signal(signal.SIGTERM, shutdown_handler)  # kill
-
     logger.info("=" * 50)
-    logger.info("근태 관리 시스템 시작")
-    logger.info("시작 시 출근 체크 수행")
-    punch_in()
-
-    scheduler = BlockingScheduler(
-        jobstores={'default': MemoryJobStore()},
-        job_defaults={
-            'coalesce': False,
-            'max_instances': 1,
-            'misfire_grace_time': 3600
-        },
-        timezone="Asia/Seoul"
-    )
-    scheduler.add_job(punch_in, 'cron', hour=8,  minute=0,  day_of_week='mon-fri')
-    scheduler.add_job(punch_out,'cron', hour=18, minute=5,  day_of_week='mon-fri')
-
-    logger.info("스케줄러 시작")
-    scheduler.start()
+    logger.info("퇴근 처리 전용 스크립트 시작")
+    logger.info("===== 퇴근 처리 시작 =====")
+    process_users()
+    logger.info("===== 퇴근 처리 완료 =====")
 
 if __name__ == '__main__':
     main()
