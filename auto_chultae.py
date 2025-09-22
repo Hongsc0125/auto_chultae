@@ -5,6 +5,7 @@ import random
 import logging
 import signal
 import json
+import threading
 from datetime import datetime, time as dt_time
 from dotenv import load_dotenv
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -246,17 +247,41 @@ def login_and_click_button(user_id, password, button_ids, action_name):
             for attempt in range(5):  # 최대 5번 시도
                 try:
                     logger.info(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1}/5")
-                    
-                    # 페이지 생성 (Playwright 기본 동작 사용)
-                    page = context.new_page()
-                    page_created = True
-                    logger.info(f"[{user_id}] [{action_name}] 페이지 생성 완료")
-                    break
+
+                    # 페이지 생성을 별도 스레드에서 타임아웃과 함께 실행
+                    page_result = [None]
+                    exception_result = [None]
+
+                    def create_page_thread():
+                        try:
+                            page_result[0] = context.new_page()
+                        except Exception as e:
+                            exception_result[0] = e
+
+                    thread = threading.Thread(target=create_page_thread)
+                    thread.daemon = True
+                    thread.start()
+                    thread.join(timeout=30)  # 30초 타임아웃
+
+                    if thread.is_alive():
+                        logger.warning(f"[{user_id}] [{action_name}] 페이지 생성 30초 타임아웃")
+                        raise Exception("페이지 생성이 30초 내에 완료되지 않았습니다")
+
+                    if exception_result[0]:
+                        raise exception_result[0]
+
+                    if page_result[0]:
+                        page = page_result[0]
+                        page_created = True
+                        logger.info(f"[{user_id}] [{action_name}] 페이지 생성 완료")
+                        break
+                    else:
+                        raise Exception("페이지 생성 결과가 None입니다")
+
                 except Exception as e:
                     logger.warning(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1}/5 실패: {e}")
                     if attempt < 4:  # 마지막 시도가 아니면 대기 후 재시도
                         logger.info(f"[{user_id}] [{action_name}] 3초 대기 후 재시도...")
-                        time.sleep(3)
                         
                         # 컨텍스트를 새로 만들어서 재시도
                         if attempt >= 2:  # 3번째 시도부터는 컨텍스트 재생성
