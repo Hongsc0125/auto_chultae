@@ -5,7 +5,6 @@ import random
 import logging
 import signal
 import json
-import threading
 from datetime import datetime, time as dt_time
 from dotenv import load_dotenv
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -248,35 +247,26 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 try:
                     logger.info(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1}/5")
 
-                    # 페이지 생성을 별도 스레드에서 타임아웃과 함께 실행
-                    page_result = [None]
-                    exception_result = [None]
+                    # signal 기반 타임아웃으로 페이지 생성
+                    def timeout_handler(signum, frame):
+                        raise TimeoutError("페이지 생성 30초 타임아웃")
 
-                    def create_page_thread():
-                        try:
-                            page_result[0] = context.new_page()
-                        except Exception as e:
-                            exception_result[0] = e
+                    # 이전 signal handler 백업
+                    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
 
-                    thread = threading.Thread(target=create_page_thread)
-                    thread.daemon = True
-                    thread.start()
-                    thread.join(timeout=30)  # 30초 타임아웃
-
-                    if thread.is_alive():
-                        logger.warning(f"[{user_id}] [{action_name}] 페이지 생성 30초 타임아웃")
-                        raise Exception("페이지 생성이 30초 내에 완료되지 않았습니다")
-
-                    if exception_result[0]:
-                        raise exception_result[0]
-
-                    if page_result[0]:
-                        page = page_result[0]
+                    try:
+                        signal.alarm(30)  # 30초 타임아웃 설정
+                        page = context.new_page()
+                        signal.alarm(0)  # 타임아웃 해제
                         page_created = True
                         logger.info(f"[{user_id}] [{action_name}] 페이지 생성 완료")
                         break
-                    else:
-                        raise Exception("페이지 생성 결과가 None입니다")
+                    except TimeoutError:
+                        signal.alarm(0)  # 타임아웃 해제
+                        logger.warning(f"[{user_id}] [{action_name}] 페이지 생성 30초 타임아웃")
+                        raise Exception("페이지 생성이 30초 내에 완료되지 않았습니다")
+                    finally:
+                        signal.signal(signal.SIGALRM, old_handler)  # 이전 handler 복원
 
                 except Exception as e:
                     logger.warning(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1}/5 실패: {e}")
