@@ -4,7 +4,6 @@ import time
 import random
 import logging
 import signal
-import threading
 from datetime import datetime, time as dt_time
 from dotenv import load_dotenv
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -14,15 +13,6 @@ from playwright.sync_api import sync_playwright
 # .env 파일 로드
 load_dotenv()
 
-# 전역 스케줄러 선언 (signal 핸들러에서 접근하기 위해)
-scheduler = None
-
-# 종료 시그널 핸들러 (메인 스레드에서만 사용)
-def shutdown_handler(signum, frame):
-    logging.getLogger('auto_chultae').info("종료 신호를 수신했습니다. 스케줄러 종료 중...")
-    if scheduler:
-        scheduler.shutdown(wait=True)
-    sys.exit(0)
 
 # 로깅 설정
 def setup_logging():
@@ -331,6 +321,44 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 # 페이지 이동 완료 하트비트
                 update_heartbeat("page_loaded", user_id, action_name)
 
+                # 로그인 폼 요소들이 로드될 때까지 대기
+                logger.info(f"[{user_id}] [{action_name}] 로그인 폼 로드 대기 중...")
+
+                try:
+                    page.wait_for_selector("#userId", timeout=60000)  # 60초 대기
+                    page.wait_for_selector("#password", timeout=30000)  # 30초 대기
+                    page.wait_for_selector("button[type=submit]", timeout=30000)  # 30초 대기
+                    logger.info(f"[{user_id}] [{action_name}] 로그인 폼 로드 완료")
+                except Exception as selector_error:
+                    # 로그인 폼 로드 실패 시 디버깅 정보 수집
+                    logger.error(f"[{user_id}] [{action_name}] 로그인 폼 로드 실패: {selector_error}")
+
+                    # 현재 페이지 URL과 제목 확인
+                    current_url = page.url
+                    page_title = page.title()
+                    logger.error(f"[{user_id}] [{action_name}] 현재 URL: {current_url}")
+                    logger.error(f"[{user_id}] [{action_name}] 페이지 제목: {page_title}")
+
+                    # 디버깅용 스크린샷 저장
+                    os.makedirs("screenshots", exist_ok=True)
+                    debug_path = f"screenshots/login_form_error_{user_id}_{int(time.time())}.png"
+                    page.screenshot(path=debug_path, full_page=True)
+                    logger.error(f"[{user_id}] [{action_name}] 디버깅 스크린샷 저장: {debug_path}")
+
+                    # HTML 내용도 저장
+                    html_debug_path = f"screenshots/login_form_error_{user_id}_{int(time.time())}.html"
+                    with open(html_debug_path, 'w', encoding='utf-8') as f:
+                        f.write(page.content())
+                    logger.error(f"[{user_id}] [{action_name}] HTML 내용 저장: {html_debug_path}")
+
+                    raise selector_error
+
+                # 폼 로드 완료 하트비트
+                update_heartbeat("login_form_loaded", user_id, action_name)
+
+                # 추가 안정화 대기
+                time.sleep(2)
+
                 logger.info(f"[{user_id}] [{action_name}] 아이디 입력 시작...")
                 page.fill("#userId", user_id)
                 logger.info(f"[{user_id}] [{action_name}] 아이디 입력 완료")
@@ -475,61 +503,96 @@ def login_and_click_button(user_id, password, button_ids, action_name):
         except:
             pass
 
-def process_users(button_ids, action_name):
-    for u in USERS:
-        uid = u["user_id"]; pwd = u["password"]
-        logger.info(f"=== 사용자 처리 시작: {uid}, 작업: {action_name} ===")
+# 전역 스케줄러 선언
+scheduler = None
+
+# 종료 시그널 핸들러
+def shutdown_handler(signum, frame):
+    logging.getLogger('auto_chultae').info("종료 신호를 수신했습니다. 스케줄러 종료 중...")
+    if scheduler:
+        scheduler.shutdown(wait=True)
+    sys.exit(0)
+
+def process_users_with_retry(action_name, start_time, end_time):
+    """시간대별 사용자 처리 및 재시도"""
+    current_time = datetime.now().time()
+
+    # 시간대 체크
+    if not (start_time <= current_time <= end_time):
+        return
+
+    button_ids = [PUNCH_IN_BUTTON_ID] if action_name == "punch_in" else PUNCH_OUT_BUTTON_IDS
+
+    logger.info(f"===== {action_name} 처리 시작 ({current_time}) =====")
+
+    failed_users = []
+
+    for user_info in USERS:
+        user_id = user_info["user_id"]
+        password = user_info["password"]
+
+        logger.info(f"=== 사용자 처리 시작: {user_id}, 작업: {action_name} ===")
+
         try:
             delay = random.randint(0, 60)
-            logger.info(f"[{uid}] [{action_name}] 랜덤 딜레이: {delay}s")
+            logger.info(f"[{user_id}] [{action_name}] 랜덤 딜레이: {delay}s")
             time.sleep(delay)
-            login_and_click_button(uid, pwd, button_ids, action_name)
+
+            login_and_click_button(user_id, password, button_ids, action_name)
+            logger.info(f"[{user_id}] [{action_name}] 성공")
+
         except Exception as e:
             if "이미 출근 완료" in str(e) or "이미 처리 완료" in str(e):
-                logger.info(f"[{uid}] [{action_name}] {e}")
+                logger.info(f"[{user_id}] [{action_name}] {e}")
             else:
-                logger.error(f"[{uid}] [{action_name}] 처리 중 오류: {e}")
-        logger.info(f"=== {uid} 처리 완료 ===\n")
+                logger.error(f"[{user_id}] [{action_name}] 처리 중 오류: {e}")
+                failed_users.append(user_id)
+
+        logger.info(f"=== {user_id} 처리 완료 ===\n")
+
+    logger.info(f"===== {action_name} 처리 완료 =====")
 
 def punch_in():
-    logger.info("===== 출근 처리 시작 =====")
-    process_users([PUNCH_IN_BUTTON_ID], "punch_in")
-    logger.info("===== 출근 처리 완료 =====")
+    """출근 처리 (08:00-08:40)"""
+    process_users_with_retry("punch_in", dt_time(8, 0), dt_time(8, 40))
 
 def punch_out():
-    logger.info("===== 퇴근 처리 시작 =====")
-    process_users(PUNCH_OUT_BUTTON_IDS, "punch_out")
-    logger.info("===== 퇴근 처리 완료 =====")
+    """퇴근 처리 (18:00-19:00)"""
+    process_users_with_retry("punch_out", dt_time(18, 0), dt_time(19, 0))
 
 def main():
     global scheduler
 
-    # 메인 스레드에서만 시그널 핸들러 등록
-    signal.signal(signal.SIGINT, shutdown_handler)   # Ctrl+C
-    signal.signal(signal.SIGTERM, shutdown_handler)  # kill
+    # 시그널 핸들러 등록
+    signal.signal(signal.SIGINT, shutdown_handler)
+    signal.signal(signal.SIGTERM, shutdown_handler)
 
     logger.info("=" * 50)
-    logger.info("근태 관리 시스템 시작")
+    logger.info("근태 관리 시스템 시작 (워치독 연동)")
 
     # 초기 하트비트
     update_heartbeat("system_startup")
 
-    logger.info("시작 시 출근 체크 수행")
-    update_heartbeat("initial_punch_in_start")
-    punch_in()
-    update_heartbeat("initial_punch_in_complete")
-
     scheduler = BlockingScheduler(
         jobstores={'default': MemoryJobStore()},
         job_defaults={
-            'coalesce': False,
+            'coalesce': True,
             'max_instances': 1,
-            'misfire_grace_time': 3600
+            'misfire_grace_time': 300
         },
         timezone="Asia/Seoul"
     )
-    scheduler.add_job(punch_in, 'cron', hour=8,  minute=0,  day_of_week='mon-fri')
-    scheduler.add_job(punch_out,'cron', hour=18, minute=5,  day_of_week='mon-fri')
+
+    # 출근: 08:00-08:40 동안 5분마다 체크
+    for minute in range(0, 41, 5):  # 0, 5, 10, 15, 20, 25, 30, 35, 40
+        scheduler.add_job(punch_in, 'cron', hour=8, minute=minute, day_of_week='mon-fri')
+
+    # 퇴근: 18:00-19:00 동안 5분마다 체크
+    for minute in range(0, 61, 5):  # 0, 5, 10, ..., 55, 60(19:00)
+        scheduler.add_job(punch_out, 'cron', hour=18, minute=minute, day_of_week='mon-fri')
+
+    # 19:00에도 한 번 더
+    scheduler.add_job(punch_out, 'cron', hour=19, minute=0, day_of_week='mon-fri')
 
     logger.info("스케줄러 시작")
     scheduler.start()
