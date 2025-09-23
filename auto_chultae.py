@@ -43,6 +43,32 @@ def setup_logging():
 
 logger = setup_logging()
 
+# 하트비트 함수
+def update_heartbeat(stage="unknown", user_id=None, action=None):
+    """워치독을 위한 하트비트 파일 업데이트"""
+    try:
+        timestamp = datetime.now().isoformat()
+        heartbeat_data = {
+            "timestamp": timestamp,
+            "stage": stage,
+            "user_id": user_id,
+            "action": action,
+            "pid": os.getpid()
+        }
+
+        with open("heartbeat.txt", "w") as f:
+            import json
+            f.write(json.dumps(heartbeat_data, ensure_ascii=False) + "\n")
+
+        # 상세 로그
+        if user_id and action:
+            logger.info(f"💓 HEARTBEAT: [{user_id}] [{action}] {stage}")
+        else:
+            logger.info(f"💓 HEARTBEAT: {stage}")
+
+    except Exception as e:
+        logger.warning(f"하트비트 업데이트 실패: {e}")
+
 # 사용자 계정 정보
 users_str = os.getenv("USERS", "")
 USERS = []
@@ -199,6 +225,9 @@ def wait_and_click_button(page, button_selector, user_id, action_name, max_attem
 def login_and_click_button(user_id, password, button_ids, action_name):
     start_time = time.time()
     logger.info(f"[{user_id}] [{action_name}] 프로세스 시작")
+
+    # 시작 하트비트
+    update_heartbeat("process_start", user_id, action_name)
     
     browser = None
     context = None
@@ -206,6 +235,10 @@ def login_and_click_button(user_id, password, button_ids, action_name):
     try:
         with sync_playwright() as p:
             logger.info(f"[{user_id}] [{action_name}] Playwright 초기화 완료")
+
+            # Playwright 초기화 하트비트
+            update_heartbeat("playwright_init", user_id, action_name)
+
             logger.info(f"[{user_id}] [{action_name}] 브라우저 실행 시작...")
             browser = p.chromium.launch(
                 headless=True,
@@ -226,6 +259,10 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 ]
             )
             logger.info(f"[{user_id}] [{action_name}] 브라우저 실행 완료")
+
+            # 브라우저 실행 완료 하트비트
+            update_heartbeat("browser_started", user_id, action_name)
+
             logger.info(f"[{user_id}] [{action_name}] 브라우저 컨텍스트 생성 시작...")
             context = browser.new_context(
                 viewport={'width': 1920, 'height': 1080},
@@ -235,12 +272,18 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 proxy=PROXY_CONFIG
             )
             logger.info(f"[{user_id}] [{action_name}] 브라우저 컨텍스트 생성 완료")
-            
+
+            # 컨텍스트 생성 완료 하트비트
+            update_heartbeat("context_created", user_id, action_name)
+
             # 컨텍스트 타임아웃 설정 (짧게)
             context.set_default_timeout(30000)  # 30초 타임아웃
             context.set_default_navigation_timeout(60000)  # 네비게이션 60초 타임아웃
 
             logger.info(f"[{user_id}] [{action_name}] 새 페이지 생성...")
+
+            # 페이지 생성 시작 하트비트
+            update_heartbeat("page_creation_start", user_id, action_name)
 
             # 페이지 생성 재시도 (최대 3번)
             page = None
@@ -249,8 +292,15 @@ def login_and_click_button(user_id, password, button_ids, action_name):
             for attempt in range(max_attempts):
                 try:
                     logger.info(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1}/{max_attempts}")
+
+                    # 페이지 생성 시도 하트비트
+                    update_heartbeat(f"page_creation_attempt_{attempt + 1}", user_id, action_name)
+
                     page = context.new_page()
                     logger.info(f"[{user_id}] [{action_name}] 페이지 생성 완료")
+
+                    # 페이지 생성 성공 하트비트
+                    update_heartbeat("page_created", user_id, action_name)
                     break
                 except Exception as e:
                     if attempt < max_attempts - 1:
@@ -265,53 +315,94 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 raise Exception("페이지 생성에 실패했습니다")
             
             try:
+                # 로그인 시작 하트비트
+                update_heartbeat("login_start", user_id, action_name)
+
                 # 로그인
                 logger.info(f"[{user_id}] [{action_name}] 로그인 페이지로 이동: {LOGIN_URL}")
                 logger.info(f"[{user_id}] [{action_name}] 페이지 이동 시작...")
+
+                # 페이지 이동 하트비트
+                update_heartbeat("page_navigation", user_id, action_name)
+
                 page.goto(LOGIN_URL, timeout=600000, wait_until="load")
                 logger.info(f"[{user_id}] [{action_name}] 페이지 이동 완료")
-                
+
+                # 페이지 이동 완료 하트비트
+                update_heartbeat("page_loaded", user_id, action_name)
+
                 logger.info(f"[{user_id}] [{action_name}] 아이디 입력 시작...")
                 page.fill("#userId", user_id)
                 logger.info(f"[{user_id}] [{action_name}] 아이디 입력 완료")
-                
+
+                # 아이디 입력 완료 하트비트
+                update_heartbeat("userid_filled", user_id, action_name)
+
                 logger.info(f"[{user_id}] [{action_name}] 비밀번호 입력 시작...")
                 page.fill("#password", password)
                 logger.info(f"[{user_id}] [{action_name}] 비밀번호 입력 완료")
-                
+
+                # 비밀번호 입력 완료 하트비트
+                update_heartbeat("password_filled", user_id, action_name)
+
                 logger.info(f"[{user_id}] [{action_name}] 로그인 버튼 클릭 시작...")
+
+                # 로그인 버튼 클릭 시작 하트비트
+                update_heartbeat("login_button_click", user_id, action_name)
+
                 page.click("button[type=submit]")
                 logger.info(f"[{user_id}] [{action_name}] 로그인 버튼 클릭 완료")
                 
                 # 로그인 완료 대기
                 logger.info(f"[{user_id}] [{action_name}] 메인 페이지 이동 대기 중...")
-                
+
+                # 메인 페이지 이동 대기 시작 하트비트
+                update_heartbeat("main_page_wait", user_id, action_name)
+
                 # 메인 페이지 이동 대기 (Playwright 자체 타임아웃 사용)
                 try:
                     page.wait_for_url("**/homGwMain", timeout=120000)  # 120초 타임아웃
                     logger.info(f"[{user_id}] [{action_name}] 메인 페이지 이동 완료")
+
+                    # 메인 페이지 이동 완료 하트비트
+                    update_heartbeat("main_page_loaded", user_id, action_name)
+
                 except Exception as e:
                     logger.error(f"[{user_id}] [{action_name}] 메인 페이지 이동 타임아웃: {e}")
                     raise e
                 
                 logger.info(f"[{user_id}] [{action_name}] 페이지 로드 상태 대기 중...")
+
+                # 페이지 로드 상태 대기 하트비트
+                update_heartbeat("page_load_wait", user_id, action_name)
+
                 page.wait_for_load_state("load", timeout=600000)
                 logger.info(f"[{user_id}] [{action_name}] 페이지 로드 완료")
-                
+
+                # 페이지 로드 완료 하트비트
+                update_heartbeat("page_load_complete", user_id, action_name)
+
                 logger.info(f"[{user_id}] [{action_name}] 로그인 성공")
+
+                # 로그인 성공 하트비트
+                update_heartbeat("login_success", user_id, action_name)
                 
             except Exception as e:
                 logger.error(f"[{user_id}] [{action_name}] 로그인 중 오류 발생: {e}")
                 raise
 
             # 페이지 완전 로드 대기
+            update_heartbeat("page_stabilize_wait", user_id, action_name)
             time.sleep(3)
 
             # 모든 팝업 닫기
+            update_heartbeat("popup_close_start", user_id, action_name)
             close_all_popups(page, user_id, action_name)
             time.sleep(2)
+            update_heartbeat("popup_close_complete", user_id, action_name)
 
             # 바로 버튼 클릭 시도 (테이블 로드 대기 제거)
+            update_heartbeat("button_click_start", user_id, action_name)
             clicked = False
             for btn in button_ids:
                 if wait_and_click_button(page, btn, user_id, action_name):
@@ -362,7 +453,12 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 raise Exception(error_msg)
 
             # 클릭 후 처리 대기
+            update_heartbeat("button_clicked_success", user_id, action_name)
             time.sleep(3)
+
+            # 완료 시 하트비트 업데이트
+            update_heartbeat("process_complete", user_id, action_name)
+
             elapsed = time.time() - start_time
             logger.info(f"[{user_id}] [{action_name}] 완료 (소요시간: {elapsed:.2f}s)")
 
@@ -407,15 +503,21 @@ def punch_out():
 
 def main():
     global scheduler
-    
+
     # 메인 스레드에서만 시그널 핸들러 등록
     signal.signal(signal.SIGINT, shutdown_handler)   # Ctrl+C
     signal.signal(signal.SIGTERM, shutdown_handler)  # kill
 
     logger.info("=" * 50)
     logger.info("근태 관리 시스템 시작")
+
+    # 초기 하트비트
+    update_heartbeat("system_startup")
+
     logger.info("시작 시 출근 체크 수행")
+    update_heartbeat("initial_punch_in_start")
     punch_in()
+    update_heartbeat("initial_punch_in_complete")
 
     scheduler = BlockingScheduler(
         jobstores={'default': MemoryJobStore()},
