@@ -4,7 +4,7 @@ import time
 import random
 import logging
 import signal
-import multiprocessing
+import threading
 from datetime import datetime, time as dt_time
 from dotenv import load_dotenv
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -236,86 +236,29 @@ def login_and_click_button(user_id, password, button_ids, action_name):
             )
             logger.info(f"[{user_id}] [{action_name}] 브라우저 컨텍스트 생성 완료")
             
-            # 컨텍스트 타임아웃 설정
-            context.set_default_timeout(600000)  # 600초 타임아웃
-            context.set_default_navigation_timeout(600000)  # 네비게이션 600초 타임아웃
-            
+            # 컨텍스트 타임아웃 설정 (짧게)
+            context.set_default_timeout(30000)  # 30초 타임아웃
+            context.set_default_navigation_timeout(60000)  # 네비게이션 60초 타임아웃
+
             logger.info(f"[{user_id}] [{action_name}] 새 페이지 생성...")
 
-            # multiprocessing으로 페이지 생성 (최대 3번 재시도)
+            # 페이지 생성 재시도 (최대 3번)
             page = None
             max_attempts = 3
 
             for attempt in range(max_attempts):
                 try:
                     logger.info(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1}/{max_attempts}")
-
-                    def create_page_process(queue):
-                        """별도 프로세스에서 페이지 생성"""
-                        try:
-                            temp_page = context.new_page()
-                            queue.put(("SUCCESS", None))
-                        except Exception as e:
-                            queue.put(("ERROR", str(e)))
-
-                    # 멀티프로세싱 큐 생성
-                    queue = multiprocessing.Queue()
-
-                    # 프로세스 시작
-                    process = multiprocessing.Process(target=create_page_process, args=(queue,))
-                    process.start()
-
-                    # 30초 대기
-                    process.join(30)
-
-                    if process.is_alive():
-                        # 30초 내에 완료되지 않으면 강제 종료
-                        logger.warning(f"[{user_id}] [{action_name}] 페이지 생성 30초 타임아웃, 프로세스 강제 종료")
-                        process.terminate()
-                        process.join(5)  # 5초 추가 대기
-
-                        if process.is_alive():
-                            # 여전히 살아있으면 kill
-                            process.kill()
-                            process.join()
-
-                        if attempt < max_attempts - 1:
-                            logger.info(f"[{user_id}] [{action_name}] 2초 대기 후 재시도...")
-                            time.sleep(2)
-                            continue
-                        else:
-                            raise Exception("페이지 생성이 30초 내에 완료되지 않았습니다")
-
-                    # 프로세스 완료됨, 결과 확인
-                    try:
-                        result_type, result_data = queue.get_nowait()
-                        if result_type == "SUCCESS":
-                            # 실제 페이지 생성 (테스트 성공했으므로)
-                            page = context.new_page()
-                            logger.info(f"[{user_id}] [{action_name}] 페이지 생성 완료")
-                            break
-                        else:
-                            if attempt < max_attempts - 1:
-                                logger.warning(f"[{user_id}] [{action_name}] 페이지 생성 실패: {result_data}, 재시도...")
-                                time.sleep(2)
-                                continue
-                            else:
-                                raise Exception(f"페이지 생성 실패: {result_data}")
-                    except:
-                        if attempt < max_attempts - 1:
-                            logger.warning(f"[{user_id}] [{action_name}] 결과 확인 실패, 재시도...")
-                            time.sleep(2)
-                            continue
-                        else:
-                            raise Exception("페이지 생성 결과를 확인할 수 없습니다")
-
+                    page = context.new_page()
+                    logger.info(f"[{user_id}] [{action_name}] 페이지 생성 완료")
+                    break
                 except Exception as e:
                     if attempt < max_attempts - 1:
-                        logger.warning(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1} 실패: {e}, 재시도...")
+                        logger.warning(f"[{user_id}] [{action_name}] 페이지 생성 실패: {e}, 2초 후 재시도...")
                         time.sleep(2)
                         continue
                     else:
-                        logger.error(f"[{user_id}] [{action_name}] 모든 페이지 생성 시도 실패")
+                        logger.error(f"[{user_id}] [{action_name}] 모든 페이지 생성 시도 실패: {e}")
                         raise e
 
             if not page:
