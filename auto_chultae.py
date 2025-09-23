@@ -363,20 +363,12 @@ def login_and_click_button(user_id, password, button_ids, action_name):
 
             # 페이지 완전 로드 대기
             time.sleep(3)
-            
+
             # 모든 팝업 닫기
             close_all_popups(page, user_id, action_name)
             time.sleep(2)
 
-            # 근태 관리 테이블 로드 대기
-            try:
-                page.wait_for_selector("table", timeout=45000)
-                page.wait_for_selector("td#ptlAttendRegist_punch_in", timeout=45000)
-                logger.info(f"[{user_id}] [{action_name}] 근태 관리 테이블 로드 완료")
-            except Exception as e:
-                logger.warning(f"[{user_id}] [{action_name}] 테이블 로드 대기 실패: {e}")
-
-            # 버튼 클릭 시도
+            # 바로 버튼 클릭 시도 (테이블 로드 대기 제거)
             clicked = False
             for btn in button_ids:
                 if wait_and_click_button(page, btn, user_id, action_name):
