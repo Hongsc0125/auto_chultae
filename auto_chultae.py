@@ -4,7 +4,7 @@ import time
 import random
 import logging
 import signal
-import subprocess
+import multiprocessing
 from datetime import datetime, time as dt_time
 from dotenv import load_dotenv
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -242,74 +242,84 @@ def login_and_click_button(user_id, password, button_ids, action_name):
             
             logger.info(f"[{user_id}] [{action_name}] 새 페이지 생성...")
 
-            # subprocess로 페이지 생성 테스트 (30초 타임아웃)
-            test_script = f'''
-import os
-import sys
-from playwright.sync_api import sync_playwright
-from dotenv import load_dotenv
+            # multiprocessing으로 페이지 생성 (최대 3번 재시도)
+            page = None
+            max_attempts = 3
 
-load_dotenv()
+            for attempt in range(max_attempts):
+                try:
+                    logger.info(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1}/{max_attempts}")
 
-PROXY_CONFIG = {{
-    "server": os.getenv("PROXY_SERVER"),
-    "username": os.getenv("PROXY_USERNAME"),
-    "password": os.getenv("PROXY_PASSWORD")
-}}
+                    def create_page_process(queue):
+                        """별도 프로세스에서 페이지 생성"""
+                        try:
+                            temp_page = context.new_page()
+                            queue.put(("SUCCESS", None))
+                        except Exception as e:
+                            queue.put(("ERROR", str(e)))
 
-try:
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                '--no-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-blink-features=AutomationControlled',
-                '--disable-extensions',
-                '--disable-web-security',
-                '--ignore-certificate-errors-spki-list',
-                '--ignore-certificate-errors',
-                '--ignore-ssl-errors',
-                '--proxy-bypass-list=<-loopback>',
-                '--disable-features=VizDisplayCompositor',
-                '--lang=ko-KR',
-                '--font-render-hinting=none',
-                '--disable-font-subpixel-positioning'
-            ]
-        )
-        context = browser.new_context(
-            viewport={{'width': 1920, 'height': 1080}},
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            locale='ko-KR',
-            timezone_id='Asia/Seoul',
-            proxy=PROXY_CONFIG
-        )
-        context.set_default_timeout(30000)
-        page = context.new_page()
-        print("PAGE_CREATION_SUCCESS")
-        browser.close()
-except Exception as e:
-    print(f"PAGE_CREATION_ERROR: {{e}}")
-    sys.exit(1)
-'''
+                    # 멀티프로세싱 큐 생성
+                    queue = multiprocessing.Queue()
 
-            try:
-                result = subprocess.run([sys.executable, "-c", test_script],
-                                      timeout=35, capture_output=True, text=True)
+                    # 프로세스 시작
+                    process = multiprocessing.Process(target=create_page_process, args=(queue,))
+                    process.start()
 
-                if "PAGE_CREATION_SUCCESS" in result.stdout:
-                    logger.info(f"[{user_id}] [{action_name}] subprocess 페이지 생성 테스트 성공")
-                    # 테스트 성공하면 실제 페이지 생성
-                    page = context.new_page()
-                    logger.info(f"[{user_id}] [{action_name}] 페이지 생성 완료")
-                else:
-                    error_msg = result.stderr or result.stdout
-                    logger.error(f"[{user_id}] [{action_name}] subprocess 테스트 실패: {error_msg}")
-                    raise Exception(f"페이지 생성 환경 테스트 실패: {error_msg}")
+                    # 30초 대기
+                    process.join(30)
 
-            except subprocess.TimeoutExpired:
-                logger.error(f"[{user_id}] [{action_name}] subprocess 35초 타임아웃")
-                raise Exception("페이지 생성 환경 테스트가 35초 내에 완료되지 않았습니다")
+                    if process.is_alive():
+                        # 30초 내에 완료되지 않으면 강제 종료
+                        logger.warning(f"[{user_id}] [{action_name}] 페이지 생성 30초 타임아웃, 프로세스 강제 종료")
+                        process.terminate()
+                        process.join(5)  # 5초 추가 대기
+
+                        if process.is_alive():
+                            # 여전히 살아있으면 kill
+                            process.kill()
+                            process.join()
+
+                        if attempt < max_attempts - 1:
+                            logger.info(f"[{user_id}] [{action_name}] 2초 대기 후 재시도...")
+                            time.sleep(2)
+                            continue
+                        else:
+                            raise Exception("페이지 생성이 30초 내에 완료되지 않았습니다")
+
+                    # 프로세스 완료됨, 결과 확인
+                    try:
+                        result_type, result_data = queue.get_nowait()
+                        if result_type == "SUCCESS":
+                            # 실제 페이지 생성 (테스트 성공했으므로)
+                            page = context.new_page()
+                            logger.info(f"[{user_id}] [{action_name}] 페이지 생성 완료")
+                            break
+                        else:
+                            if attempt < max_attempts - 1:
+                                logger.warning(f"[{user_id}] [{action_name}] 페이지 생성 실패: {result_data}, 재시도...")
+                                time.sleep(2)
+                                continue
+                            else:
+                                raise Exception(f"페이지 생성 실패: {result_data}")
+                    except:
+                        if attempt < max_attempts - 1:
+                            logger.warning(f"[{user_id}] [{action_name}] 결과 확인 실패, 재시도...")
+                            time.sleep(2)
+                            continue
+                        else:
+                            raise Exception("페이지 생성 결과를 확인할 수 없습니다")
+
+                except Exception as e:
+                    if attempt < max_attempts - 1:
+                        logger.warning(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1} 실패: {e}, 재시도...")
+                        time.sleep(2)
+                        continue
+                    else:
+                        logger.error(f"[{user_id}] [{action_name}] 모든 페이지 생성 시도 실패")
+                        raise e
+
+            if not page:
+                raise Exception("페이지 생성에 실패했습니다")
             
             try:
                 # 로그인
