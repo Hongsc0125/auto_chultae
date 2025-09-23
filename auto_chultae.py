@@ -4,7 +4,7 @@ import time
 import random
 import logging
 import signal
-import json
+import subprocess
 from datetime import datetime, time as dt_time
 from dotenv import load_dotenv
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -241,61 +241,75 @@ def login_and_click_button(user_id, password, button_ids, action_name):
             context.set_default_navigation_timeout(600000)  # 네비게이션 600초 타임아웃
             
             logger.info(f"[{user_id}] [{action_name}] 새 페이지 생성...")
-            page_created = False
-            
-            for attempt in range(5):  # 최대 5번 시도
-                try:
-                    logger.info(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1}/5")
 
-                    # signal 기반 타임아웃으로 페이지 생성
-                    def timeout_handler(signum, frame):
-                        raise TimeoutError("페이지 생성 30초 타임아웃")
+            # subprocess로 페이지 생성 테스트 (30초 타임아웃)
+            test_script = f'''
+import os
+import sys
+from playwright.sync_api import sync_playwright
+from dotenv import load_dotenv
 
-                    # 이전 signal handler 백업
-                    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+load_dotenv()
 
-                    try:
-                        signal.alarm(30)  # 30초 타임아웃 설정
-                        page = context.new_page()
-                        signal.alarm(0)  # 타임아웃 해제
-                        page_created = True
-                        logger.info(f"[{user_id}] [{action_name}] 페이지 생성 완료")
-                        break
-                    except TimeoutError:
-                        signal.alarm(0)  # 타임아웃 해제
-                        logger.warning(f"[{user_id}] [{action_name}] 페이지 생성 30초 타임아웃")
-                        raise Exception("페이지 생성이 30초 내에 완료되지 않았습니다")
-                    finally:
-                        signal.signal(signal.SIGALRM, old_handler)  # 이전 handler 복원
+PROXY_CONFIG = {{
+    "server": os.getenv("PROXY_SERVER"),
+    "username": os.getenv("PROXY_USERNAME"),
+    "password": os.getenv("PROXY_PASSWORD")
+}}
 
-                except Exception as e:
-                    logger.warning(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1}/5 실패: {e}")
-                    if attempt < 4:  # 마지막 시도가 아니면 대기 후 재시도
-                        logger.info(f"[{user_id}] [{action_name}] 3초 대기 후 재시도...")
-                        
-                        # 컨텍스트를 새로 만들어서 재시도
-                        if attempt >= 2:  # 3번째 시도부터는 컨텍스트 재생성
-                            try:
-                                logger.info(f"[{user_id}] [{action_name}] 컨텍스트 재생성 시도")
-                                context.close()
-                                context = browser.new_context(
-                                    viewport={'width': 1920, 'height': 1080},
-                                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                                    locale='ko-KR',
-                                    timezone_id='Asia/Seoul',
-                                    proxy=PROXY_CONFIG
-                                )
-                                context.set_default_timeout(600000)
-                                context.set_default_navigation_timeout(600000)
-                                logger.info(f"[{user_id}] [{action_name}] 컨텍스트 재생성 완료")
-                            except Exception as ctx_err:
-                                logger.warning(f"[{user_id}] [{action_name}] 컨텍스트 재생성 실패: {ctx_err}")
-                        continue
-                    else:
-                        raise Exception(f"페이지 생성 최대 재시도 횟수 초과: {e}")
-            
-            if not page_created:
-                raise Exception("페이지 생성에 실패했습니다")
+try:
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                '--no-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-extensions',
+                '--disable-web-security',
+                '--ignore-certificate-errors-spki-list',
+                '--ignore-certificate-errors',
+                '--ignore-ssl-errors',
+                '--proxy-bypass-list=<-loopback>',
+                '--disable-features=VizDisplayCompositor',
+                '--lang=ko-KR',
+                '--font-render-hinting=none',
+                '--disable-font-subpixel-positioning'
+            ]
+        )
+        context = browser.new_context(
+            viewport={{'width': 1920, 'height': 1080}},
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            locale='ko-KR',
+            timezone_id='Asia/Seoul',
+            proxy=PROXY_CONFIG
+        )
+        context.set_default_timeout(30000)
+        page = context.new_page()
+        print("PAGE_CREATION_SUCCESS")
+        browser.close()
+except Exception as e:
+    print(f"PAGE_CREATION_ERROR: {{e}}")
+    sys.exit(1)
+'''
+
+            try:
+                result = subprocess.run([sys.executable, "-c", test_script],
+                                      timeout=35, capture_output=True, text=True)
+
+                if "PAGE_CREATION_SUCCESS" in result.stdout:
+                    logger.info(f"[{user_id}] [{action_name}] subprocess 페이지 생성 테스트 성공")
+                    # 테스트 성공하면 실제 페이지 생성
+                    page = context.new_page()
+                    logger.info(f"[{user_id}] [{action_name}] 페이지 생성 완료")
+                else:
+                    error_msg = result.stderr or result.stdout
+                    logger.error(f"[{user_id}] [{action_name}] subprocess 테스트 실패: {error_msg}")
+                    raise Exception(f"페이지 생성 환경 테스트 실패: {error_msg}")
+
+            except subprocess.TimeoutExpired:
+                logger.error(f"[{user_id}] [{action_name}] subprocess 35초 타임아웃")
+                raise Exception("페이지 생성 환경 테스트가 35초 내에 완료되지 않았습니다")
             
             try:
                 # 로그인
