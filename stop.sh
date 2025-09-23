@@ -1,10 +1,36 @@
 #!/bin/bash
 
-# 출석 관리 시스템 종료 스크립트
+# 출석 관리 시스템 종료 스크립트 (Watchdog 포함)
 
 cd "$(dirname "$0")"
 
-echo "출근 관리 종료!!"
+echo "출근 관리 종료!! (Watchdog 포함)"
+
+# 워치독 종료 먼저
+echo "워치독 종료 중..."
+if [ -f "watchdog.pid" ]; then
+    WATCHDOG_PID=$(cat watchdog.pid)
+    if ps -p $WATCHDOG_PID > /dev/null 2>&1; then
+        kill $WATCHDOG_PID
+        echo "워치독 종료 중... (PID: $WATCHDOG_PID)"
+        sleep 2
+        if ps -p $WATCHDOG_PID > /dev/null 2>&1; then
+            kill -9 $WATCHDOG_PID
+            echo "워치독 강제 종료"
+        fi
+    fi
+    rm -f watchdog.pid
+else
+    # 프로세스 이름으로 워치독 종료
+    WATCHDOG_PIDS=$(pgrep -f "python.*watchdog.py")
+    if [ ! -z "$WATCHDOG_PIDS" ]; then
+        echo "실행 중인 워치독을 찾았습니다. 종료합니다..."
+        kill $WATCHDOG_PIDS 2>/dev/null
+        sleep 2
+        # 강제 종료
+        pkill -9 -f "python.*watchdog.py" 2>/dev/null
+    fi
+fi
 
 # PID 파일 확인
 if [ ! -f "auto_chultae.pid" ]; then
