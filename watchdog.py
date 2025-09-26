@@ -10,9 +10,6 @@ import time
 import signal
 import subprocess
 import logging
-import smtplib
-from email.mime.text import MimeText
-from email.mime.multipart import MimeMultipart
 from datetime import datetime, timedelta, time as dt_time
 from pathlib import Path
 from dotenv import load_dotenv
@@ -45,13 +42,6 @@ def setup_logging():
 
 logger = setup_logging()
 
-# 메일 설정
-SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-EMAIL_USERNAME = os.getenv("EMAIL_USERNAME", "")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
-EMAIL_DOMAIN = "@metabuild.co.kr"
-
 # 사용자 목록 로드
 users_str = os.getenv("USERS", "")
 USERS = []
@@ -60,59 +50,6 @@ if users_str:
         user_id, password = user.split(':')
         USERS.append({"user_id": user_id, "password": password})
 
-# 메일 전송 함수
-def send_email(to_user_id, subject, body):
-    """메일 전송 함수"""
-    try:
-        if not EMAIL_USERNAME or not EMAIL_PASSWORD:
-            logger.warning("메일 설정이 없어서 메일을 보낼 수 없습니다")
-            return False
-
-        to_email = f"{to_user_id}{EMAIL_DOMAIN}"
-
-        # 메일 메시지 구성
-        msg = MimeMultipart()
-        msg['From'] = EMAIL_USERNAME
-        msg['To'] = to_email
-        msg['Subject'] = subject
-
-        msg.attach(MimeText(body, 'plain', 'utf-8'))
-
-        # SMTP 서버 연결 및 전송
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
-            server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
-            server.send_message(msg)
-
-        logger.info(f"메일 전송 성공: {to_email}")
-        return True
-
-    except Exception as e:
-        logger.error(f"메일 전송 실패 ({to_email}): {e}")
-        return False
-
-def send_punch_failure_emails(failed_users, action_type="출근"):
-    """실패한 사용자들에게 메일 전송"""
-    for user_id in failed_users:
-        subject = f"🚨 {action_type} 처리 실패 알림 - {user_id}"
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        body = f"""
-안녕하세요, {user_id}님
-
-자동 {action_type} 처리가 실패했습니다.
-
-📅 일시: {current_time}
-❌ 상태: 시스템 오류로 인한 자동 처리 실패
-
-수동으로 {action_type} 처리를 해주시기 바랍니다.
-시스템 관리자에게 문의하시면 도움을 드릴 수 있습니다.
-
----
-자동 근태 관리 시스템 (Watchdog)
-"""
-
-        send_email(user_id, subject, body)
 
 class AutoChultaeWatchdog:
     def __init__(self):
@@ -125,9 +62,6 @@ class AutoChultaeWatchdog:
         self.max_restarts_per_hour = 5
         self.restart_times = []
         self.last_heartbeat_stage = None  # 마지막 하트비트 단계 추적
-        self.punch_in_failure_notified = set()  # 출근 실패 알림 보낸 사용자 추적
-        self.punch_out_failure_notified = set()  # 퇴근 실패 알림 보낸 사용자 추적
-        self.daily_reset_done = False  # 일일 리셋 여부
 
     def cleanup_old_restarts(self):
         """1시간 이상 된 재시작 기록 제거"""
@@ -298,46 +232,6 @@ class AutoChultaeWatchdog:
 
         return True
 
-    def check_punch_in_time_failure(self):
-        """08:00-08:40 출근 시간대 실패 체크"""
-        now = datetime.now()
-        current_time = now.time()
-
-        # 08:00-08:40 시간대가 아니면 체크하지 않음
-        if not (dt_time(8, 0) <= current_time <= dt_time(8, 40)):
-            return
-
-        # 일일 리셋 (자정에 알림 상태 초기화)
-        if current_time < dt_time(1, 0) and not self.daily_reset_done:
-            self.punch_in_failure_notified.clear()
-            self.daily_reset_done = True
-            logger.info("일일 출근 실패 알림 상태 초기화")
-        elif current_time > dt_time(1, 0):
-            self.daily_reset_done = False
-
-        # 하트비트 정보 확인
-        heartbeat_info = self.get_heartbeat_info()
-        heartbeat_age = heartbeat_info["age"]
-
-        # 08:30 이후에는 더 엄격하게 체크
-        if current_time > dt_time(8, 30):
-            max_allowed_age = 180  # 3분
-        else:
-            max_allowed_age = 300  # 5분
-
-        # 하트비트가 오래되었고, 메인 프로세스도 죽어있으면 실패로 판단
-        if heartbeat_age > max_allowed_age and not self.is_process_running():
-            # 아직 알림을 보내지 않은 사용자들 확인
-            failed_users = []
-            for user_info in USERS:
-                user_id = user_info["user_id"]
-                if user_id not in self.punch_in_failure_notified:
-                    failed_users.append(user_id)
-                    self.punch_in_failure_notified.add(user_id)
-
-            if failed_users:
-                logger.warning(f"출근 시간대 실패 감지: {failed_users}")
-                send_punch_failure_emails(failed_users, "출근")
 
 
     def run(self):
@@ -350,9 +244,6 @@ class AutoChultaeWatchdog:
         try:
             while True:
                 time.sleep(self.check_interval)
-
-                # 출근 시간대 실패 체크
-                self.check_punch_in_time_failure()
 
                 if not self.check_health():
                     if not self.restart_main_process():
@@ -367,11 +258,92 @@ class AutoChultaeWatchdog:
             self.kill_process()
             logger.info("워치독 종료")
 
-    def daily_reset(self):
-        """일일 리셋 (자정에 실행)"""
-        logger.info("일일 상태 초기화")
-        self.punch_in_failure_notified.clear()
-        self.punch_out_failure_notified.clear()
+
+def execute_punch_in():
+    """출근 처리 실행 (서브프로세스)"""
+    try:
+        logger.info("출근 처리 시작 - 서브프로세스 실행")
+        result = subprocess.run(
+            [sys.executable, "-c", "from auto_chultae import punch_in; punch_in()"],
+            capture_output=True,
+            text=True,
+            timeout=600  # 10분 타임아웃
+        )
+
+        if result.returncode == 0:
+            logger.info("출근 처리 성공")
+        else:
+            logger.error(f"출근 처리 실패: {result.stderr}")
+            return False
+        return True
+    except subprocess.TimeoutExpired:
+        logger.error("출근 처리 타임아웃 (10분)")
+        return False
+    except Exception as e:
+        logger.error(f"출근 처리 오류: {e}")
+        return False
+
+def execute_punch_out():
+    """퇴근 처리 실행 (서브프로세스)"""
+    try:
+        logger.info("퇴근 처리 시작 - 서브프로세스 실행")
+        result = subprocess.run(
+            [sys.executable, "-c", "from auto_chultae import punch_out; punch_out()"],
+            capture_output=True,
+            text=True,
+            timeout=600  # 10분 타임아웃
+        )
+
+        if result.returncode == 0:
+            logger.info("퇴근 처리 성공")
+        else:
+            logger.error(f"퇴근 처리 실패: {result.stderr}")
+            return False
+        return True
+    except subprocess.TimeoutExpired:
+        logger.error("퇴근 처리 타임아웃 (10분)")
+        return False
+    except Exception as e:
+        logger.error(f"퇴근 처리 오류: {e}")
+        return False
+
+def punch_in_with_retry():
+    """출근 시간대 재시도 로직 (08:00-08:40)"""
+    now = datetime.now()
+    current_time = now.time()
+
+    # 08:00-08:40 시간대가 아니면 실행하지 않음
+    if not (dt_time(8, 0) <= current_time <= dt_time(8, 40)):
+        return
+
+    logger.info(f"출근 처리 시도 시작 ({current_time})")
+
+    success = execute_punch_in()
+
+    if not success:
+        # 실패 로그 기록
+        if current_time > dt_time(8, 35):
+            failed_users = [user["user_id"] for user in USERS]
+            logger.warning(f"출근 처리 실패 - 대상 사용자: {failed_users}")
+
+def punch_out_with_retry():
+    """퇴근 시간대 재시도 로직 (18:00-19:00)"""
+    now = datetime.now()
+    current_time = now.time()
+
+    # 18:00-19:00 시간대가 아니면 실행하지 않음
+    if not (dt_time(18, 0) <= current_time <= dt_time(19, 0)):
+        return
+
+    logger.info(f"퇴근 처리 시도 시작 ({current_time})")
+
+    success = execute_punch_out()
+
+    if not success:
+        # 실패 로그 기록
+        if current_time > dt_time(18, 55):
+            failed_users = [user["user_id"] for user in USERS]
+            logger.warning(f"퇴근 처리 실패 - 대상 사용자: {failed_users}")
 
 def main():
     # 시그널 핸들러 설정
@@ -382,9 +354,45 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # 워치독 실행
+    logger.info("워치독 시스템 시작 (스케줄링 + 모니터링)")
+
+    # 스케줄러 설정
+    scheduler = BlockingScheduler(
+        jobstores={'default': MemoryJobStore()},
+        job_defaults={
+            'coalesce': True,
+            'max_instances': 1,
+            'misfire_grace_time': 300
+        },
+        timezone="Asia/Seoul"
+    )
+
+    # 출근: 08:00-08:40 동안 5분마다 체크
+    for minute in range(0, 41, 5):  # 0, 5, 10, 15, 20, 25, 30, 35, 40
+        scheduler.add_job(punch_in_with_retry, 'cron', hour=8, minute=minute, day_of_week='mon-fri')
+
+    # 퇴근: 18:00-19:00 동안 5분마다 체크
+    for minute in range(0, 61, 5):  # 0, 5, 10, ..., 55, 60(19:00)
+        scheduler.add_job(punch_out_with_retry, 'cron', hour=18, minute=minute, day_of_week='mon-fri')
+
+    # 19:00에도 한 번 더
+    scheduler.add_job(punch_out_with_retry, 'cron', hour=19, minute=0, day_of_week='mon-fri')
+
+    # 일일 상태 리셋 (자정)
+    scheduler.add_job(lambda: None, 'cron', hour=0, minute=0)  # 자정에 실행
+
+    logger.info("스케줄러 시작")
+
+    # 워치독과 스케줄러를 별도 스레드에서 실행
+    import threading
+
+    # 워치독 스레드
     watchdog = AutoChultaeWatchdog()
-    watchdog.run()
+    watchdog_thread = threading.Thread(target=watchdog.run, daemon=True)
+    watchdog_thread.start()
+
+    # 메인 스레드에서 스케줄러 실행
+    scheduler.start()
 
 if __name__ == '__main__':
     main()

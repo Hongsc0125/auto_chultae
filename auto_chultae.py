@@ -4,10 +4,8 @@ import time
 import random
 import logging
 import signal
-from datetime import datetime, time as dt_time
+from datetime import datetime
 from dotenv import load_dotenv
-from apscheduler.schedulers.blocking import BlockingScheduler
-from apscheduler.jobstores.memory import MemoryJobStore
 from playwright.sync_api import sync_playwright
 
 # .env 파일 로드
@@ -439,30 +437,44 @@ def login_and_click_button(user_id, password, button_ids, action_name):
 
             if not clicked:
                 # 마지막으로 이미 처리된 상태인지 다시 확인
-                if action_name == "punch_in":
-                    try:
-                        already_done = page.evaluate("""() => {
-                            const indicators = [
-                                'div.div_punch',
-                                'td#ptlAttendRegist_punch_in',
-                                '.attendance-complete',
-                                '[class*="punch"]'
-                            ];
-                            
-                            return indicators.some(selector => {
-                                const el = document.querySelector(selector);
-                                return el && (
-                                    el.style.display !== 'none' || 
-                                    (el.textContent && el.textContent.trim() !== '')
-                                );
-                            });
-                        }""")
-                        
-                        if already_done:
-                            logger.info(f"[{user_id}] [{action_name}] 이미 처리 완료된 상태로 확인됨")
-                            return
-                    except:
-                        pass
+                # 출근완료/퇴근완료 상태 확인
+                try:
+                    completion_status = page.evaluate("""() => {
+                        // div.div_punch에서 "출근완료" 또는 "퇴근완료" 텍스트 확인
+                        const punchDiv = document.querySelector('div.div_punch');
+                        if (punchDiv) {
+                            const text = punchDiv.textContent.trim();
+                            if (text === '출근완료' || text === '퇴근완료') {
+                                return text;
+                            }
+                        }
+
+                        // 추가적인 완료 상태 확인
+                        const indicators = [
+                            '#ptlAttendRegist_time2 div.div_punch',
+                            'td#ptlAttendRegist_punch_in',
+                            '.attendance-complete'
+                        ];
+
+                        for (const selector of indicators) {
+                            const el = document.querySelector(selector);
+                            if (el && el.textContent) {
+                                const text = el.textContent.trim();
+                                if (text.includes('완료')) {
+                                    return text;
+                                }
+                            }
+                        }
+
+                        return null;
+                    }""")
+
+                    if completion_status:
+                        logger.info(f"[{user_id}] [{action_name}] 이미 {completion_status} 상태임")
+                        raise Exception(f"이미 {completion_status}")
+                except Exception as e:
+                    if "이미" in str(e):
+                        raise e
 
                 # 스크린샷 저장
                 error_msg = f"[{user_id}] [{action_name}] 사용할 수 있는 버튼을 찾을 수 없습니다."
@@ -503,30 +515,13 @@ def login_and_click_button(user_id, password, button_ids, action_name):
         except:
             pass
 
-# 전역 스케줄러 선언
-scheduler = None
-
 # 종료 시그널 핸들러
 def shutdown_handler(signum, frame):
-    logging.getLogger('auto_chultae').info("종료 신호를 수신했습니다. 스케줄러 종료 중...")
-    if scheduler:
-        scheduler.shutdown(wait=True)
+    logging.getLogger('auto_chultae').info("종료 신호를 수신했습니다.")
     sys.exit(0)
 
-def process_users_with_retry(action_name, start_time, end_time):
-    """시간대별 사용자 처리 및 재시도"""
-    current_time = datetime.now().time()
-
-    # 시간대 체크
-    if not (start_time <= current_time <= end_time):
-        return
-
-    button_ids = [PUNCH_IN_BUTTON_ID] if action_name == "punch_in" else PUNCH_OUT_BUTTON_IDS
-
-    logger.info(f"===== {action_name} 처리 시작 ({current_time}) =====")
-
-    failed_users = []
-
+def process_users(button_ids, action_name):
+    """사용자 처리 함수 (단순 실행)"""
     for user_info in USERS:
         user_id = user_info["user_id"]
         password = user_info["password"]
@@ -546,56 +541,41 @@ def process_users_with_retry(action_name, start_time, end_time):
                 logger.info(f"[{user_id}] [{action_name}] {e}")
             else:
                 logger.error(f"[{user_id}] [{action_name}] 처리 중 오류: {e}")
-                failed_users.append(user_id)
 
         logger.info(f"=== {user_id} 처리 완료 ===\n")
 
-    logger.info(f"===== {action_name} 처리 완료 =====")
-
 def punch_in():
-    """출근 처리 (08:00-08:40)"""
-    process_users_with_retry("punch_in", dt_time(8, 0), dt_time(8, 40))
+    """출근 처리"""
+    logger.info("===== 출근 처리 시작 =====")
+    process_users([PUNCH_IN_BUTTON_ID], "punch_in")
+    logger.info("===== 출근 처리 완료 =====")
 
 def punch_out():
-    """퇴근 처리 (18:00-19:00)"""
-    process_users_with_retry("punch_out", dt_time(18, 0), dt_time(19, 0))
+    """퇴근 처리"""
+    logger.info("===== 퇴근 처리 시작 =====")
+    process_users(PUNCH_OUT_BUTTON_IDS, "punch_out")
+    logger.info("===== 퇴근 처리 완료 =====")
 
 def main():
-    global scheduler
+    """크롤링 전용 메인 함수 (직접 호출용)"""
 
     # 시그널 핸들러 등록
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
 
     logger.info("=" * 50)
-    logger.info("근태 관리 시스템 시작 (워치독 연동)")
+    logger.info("크롤링 시스템 직접 실행")
 
     # 초기 하트비트
     update_heartbeat("system_startup")
 
-    scheduler = BlockingScheduler(
-        jobstores={'default': MemoryJobStore()},
-        job_defaults={
-            'coalesce': True,
-            'max_instances': 1,
-            'misfire_grace_time': 300
-        },
-        timezone="Asia/Seoul"
-    )
+    logger.info("테스트용 출근 처리 실행")
+    punch_in()
 
-    # 출근: 08:00-08:40 동안 5분마다 체크
-    for minute in range(0, 41, 5):  # 0, 5, 10, 15, 20, 25, 30, 35, 40
-        scheduler.add_job(punch_in, 'cron', hour=8, minute=minute, day_of_week='mon-fri')
+    logger.info("테스트용 퇴근 처리 실행")
+    punch_out()
 
-    # 퇴근: 18:00-19:00 동안 5분마다 체크
-    for minute in range(0, 61, 5):  # 0, 5, 10, ..., 55, 60(19:00)
-        scheduler.add_job(punch_out, 'cron', hour=18, minute=minute, day_of_week='mon-fri')
-
-    # 19:00에도 한 번 더
-    scheduler.add_job(punch_out, 'cron', hour=19, minute=0, day_of_week='mon-fri')
-
-    logger.info("스케줄러 시작")
-    scheduler.start()
+    logger.info("크롤링 테스트 완료")
 
 if __name__ == '__main__':
     main()
