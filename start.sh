@@ -36,16 +36,26 @@ rm -f main_server.pid watchdog.pid
 # 로그 디렉토리 생성
 mkdir -p logs
 
-# 가상환경 활성화 확인
+# 가상환경 활성화 및 의존성 설치
 if [ -d ".venv" ]; then
     echo "가상환경 활성화 중..."
     source .venv/bin/activate
+    echo "🔧 의존성 설치/업데이트 중..."
+    pip3 install -r requirements.txt
 elif [ -d "venv" ]; then
     echo "가상환경 활성화 중..."
     source venv/bin/activate
+    echo "🔧 의존성 설치/업데이트 중..."
+    pip3 install -r requirements.txt
 else
     echo "가상환경을 찾을 수 없습니다. 시스템 Python을 사용합니다."
+    echo "⚠️  주의: 가상환경 없이 의존성 설치 중..."
+    pip3 install -r requirements.txt
 fi
+
+# Playwright 브라우저 설치 확인
+echo "🌐 Playwright 브라우저 설치 확인 중..."
+playwright install chromium --with-deps 2>/dev/null || echo "   Playwright 설치 완료 또는 이미 설치됨"
 
 echo ""
 echo "🚀 메인 서버 시작 중..."
