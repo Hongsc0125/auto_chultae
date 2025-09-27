@@ -3,10 +3,10 @@ import sys
 import time
 import random
 import logging
-import signal
 from datetime import datetime
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
+from db_manager import db_manager
 
 # .env 파일 로드
 load_dotenv()
@@ -33,20 +33,15 @@ logger = setup_logging()
 
 # 하트비트 함수
 def update_heartbeat(stage="unknown", user_id=None, action=None):
-    """워치독을 위한 하트비트 파일 업데이트"""
+    """하트비트 업데이트 (독립 서버 모드에서는 DB만 업데이트)"""
     try:
-        timestamp = datetime.now().isoformat()
-        heartbeat_data = {
-            "timestamp": timestamp,
-            "stage": stage,
-            "user_id": user_id,
-            "action": action,
-            "pid": os.getpid()
-        }
-
-        with open("heartbeat.txt", "w") as f:
-            import json
-            f.write(json.dumps(heartbeat_data, ensure_ascii=False) + "\n")
+        # 독립 서버 모드에서는 DB 하트비트만 사용
+        db_manager.legacy_update_heartbeat(
+            stage=stage,
+            user_id=user_id,
+            action_type=action,
+            pid=os.getpid()
+        )
 
         # 상세 로그
         if user_id and action:
@@ -57,13 +52,14 @@ def update_heartbeat(stage="unknown", user_id=None, action=None):
     except Exception as e:
         logger.warning(f"하트비트 업데이트 실패: {e}")
 
-# 사용자 계정 정보
-users_str = os.getenv("USERS", "")
-USERS = []
-if users_str:
-    for user in users_str.split(','):
-        user_id, password = user.split(':')
-        USERS.append({"user_id": user_id, "password": password})
+# 사용자 계정 정보는 데이터베이스에서 동적으로 로드
+def get_users():
+    """데이터베이스에서 활성 사용자 목록 조회"""
+    try:
+        return db_manager.get_active_users()
+    except Exception as e:
+        logger.error(f"사용자 목록 조회 실패: {e}")
+        return []
 
 # 프록시 설정
 PROXY_CONFIG = {
@@ -72,11 +68,49 @@ PROXY_CONFIG = {
     "password": os.getenv("PROXY_PASSWORD")
 }
 
-# 상수 정의
-LOGIN_URL            = os.getenv("LOGIN_URL", "https://gw.metabuild.co.kr/ekp/view/login/userLogin")
-ATTEND_PAGE_URL      = os.getenv("ATTEND_PAGE_URL", "https://gw.metabuild.co.kr/ekp/main/home/homGwMain")
-PUNCH_IN_BUTTON_ID   = "#ptlAttendRegist_btn_attn"
-PUNCH_OUT_BUTTON_IDS = ["#ptlAttendRegist_btn_lvof3", "#ptlAttendRegist_btn_lvof2"]
+# 상수 정의 - 환경변수에서 로드
+LOGIN_URL = os.getenv("LOGIN_URL")
+ATTEND_PAGE_URL = os.getenv("ATTEND_PAGE_URL")
+
+if not LOGIN_URL or not ATTEND_PAGE_URL:
+    raise ValueError("LOGIN_URL과 ATTEND_PAGE_URL 환경변수가 필수입니다. .env 파일에 설정해주세요.")
+
+# 버튼 셀렉터 - 환경변수에서 로드 (필수)
+PUNCH_IN_BUTTON_ID = os.getenv("PUNCH_IN_BUTTON_ID")
+PUNCH_OUT_BUTTON_IDS_STR = os.getenv("PUNCH_OUT_BUTTON_IDS")
+POPUP_PUNCH_IN_BUTTON_ID = os.getenv("POPUP_PUNCH_IN_BUTTON_ID")
+POPUP_PUNCH_OUT_BUTTON_ID = os.getenv("POPUP_PUNCH_OUT_BUTTON_ID")
+
+if not PUNCH_IN_BUTTON_ID:
+    raise ValueError("PUNCH_IN_BUTTON_ID 환경변수가 필수입니다.")
+if not PUNCH_OUT_BUTTON_IDS_STR:
+    raise ValueError("PUNCH_OUT_BUTTON_IDS 환경변수가 필수입니다.")
+if not POPUP_PUNCH_IN_BUTTON_ID:
+    raise ValueError("POPUP_PUNCH_IN_BUTTON_ID 환경변수가 필수입니다.")
+if not POPUP_PUNCH_OUT_BUTTON_ID:
+    raise ValueError("POPUP_PUNCH_OUT_BUTTON_ID 환경변수가 필수입니다.")
+
+PUNCH_OUT_BUTTON_IDS = PUNCH_OUT_BUTTON_IDS_STR.split(",")
+
+# 타임아웃 설정 - 환경변수에서 로드 (필수, 밀리초)
+DEFAULT_TIMEOUT_STR = os.getenv("DEFAULT_TIMEOUT")
+NAVIGATION_TIMEOUT_STR = os.getenv("NAVIGATION_TIMEOUT")
+PAGE_LOAD_TIMEOUT_STR = os.getenv("PAGE_LOAD_TIMEOUT")
+POPUP_CHECK_TIMEOUT_STR = os.getenv("POPUP_CHECK_TIMEOUT")
+
+if not DEFAULT_TIMEOUT_STR:
+    raise ValueError("DEFAULT_TIMEOUT 환경변수가 필수입니다.")
+if not NAVIGATION_TIMEOUT_STR:
+    raise ValueError("NAVIGATION_TIMEOUT 환경변수가 필수입니다.")
+if not PAGE_LOAD_TIMEOUT_STR:
+    raise ValueError("PAGE_LOAD_TIMEOUT 환경변수가 필수입니다.")
+if not POPUP_CHECK_TIMEOUT_STR:
+    raise ValueError("POPUP_CHECK_TIMEOUT 환경변수가 필수입니다.")
+
+DEFAULT_TIMEOUT = int(DEFAULT_TIMEOUT_STR)
+NAVIGATION_TIMEOUT = int(NAVIGATION_TIMEOUT_STR)
+PAGE_LOAD_TIMEOUT = int(PAGE_LOAD_TIMEOUT_STR)
+POPUP_CHECK_TIMEOUT = int(POPUP_CHECK_TIMEOUT_STR)
 
 def close_all_popups(page, user_id, action_name):
     """모든 팝업을 강제로 닫는 함수"""
@@ -155,25 +189,104 @@ def close_all_popups(page, user_id, action_name):
         logger.warning(f"[{user_id}] [{action_name}] 팝업 처리 중 오류: {e}")
 
 def wait_and_click_button(page, button_selector, user_id, action_name, max_attempts=5):
-    """버튼 클릭을 재시도하는 함수"""
+    """버튼 클릭을 재시도하는 함수 - 날짜 선택 팝업 우선 확인"""
+
+    # Step 1: 먼저 날짜 선택 팝업 버튼이 있는지 확인
+    logger.info(f"[{user_id}] [{action_name}] 1단계: 날짜 선택 팝업 버튼 확인 중...")
+
+    try:
+        # 출근인 경우 팝업 출근 버튼 확인
+        if action_name == "punch_in":
+            popup_button = POPUP_PUNCH_IN_BUTTON_ID
+            button_name = "출근"
+        else:
+            popup_button = POPUP_PUNCH_OUT_BUTTON_ID
+            button_name = "퇴근"
+
+        # 날짜 선택 팝업 버튼이 있는지 확인
+        if page.is_visible(popup_button, timeout=POPUP_CHECK_TIMEOUT):
+            logger.info(f"[{user_id}] [{action_name}] 날짜 선택 팝업 {button_name} 버튼 발견: {popup_button}")
+
+            # 팝업 버튼 클릭 시도
+            success = page.evaluate(f"""() => {{
+                const btn = document.querySelector('{popup_button}');
+                if (btn && !btn.disabled) {{
+                    btn.click();
+                    return true;
+                }}
+                return false;
+            }}""")
+
+            if success:
+                logger.info(f"[{user_id}] [{action_name}] 날짜 선택 팝업 {button_name} 버튼 클릭 성공!")
+
+                # 팝업 버튼 클릭 후 잠시 대기 후 기본 출근/퇴근 버튼 클릭 시도
+                time.sleep(2)
+                logger.info(f"[{user_id}] [{action_name}] 팝업 클릭 후 기본 {button_name} 버튼 찾는 중...")
+
+                # 이제 기본 버튼이 나타났는지 확인하고 클릭
+                for attempt in range(3):
+                    try:
+                        if page.is_visible(button_selector, timeout=5000):
+                            # 기본 버튼 클릭 시도
+                            basic_success = page.evaluate(f"""() => {{
+                                const btn = document.querySelector('{button_selector}');
+                                if (btn && !btn.disabled) {{
+                                    btn.click();
+                                    return true;
+                                }}
+                                return false;
+                            }}""")
+
+                            if basic_success:
+                                logger.info(f"[{user_id}] [{action_name}] 팝업 후 기본 {button_name} 버튼 클릭 성공!")
+                                return True
+                            else:
+                                # Playwright 클릭 시도
+                                page.click(button_selector, timeout=5000, force=True)
+                                logger.info(f"[{user_id}] [{action_name}] 팝업 후 기본 {button_name} 버튼 클릭 성공! (Playwright)")
+                                return True
+                        else:
+                            logger.info(f"[{user_id}] [{action_name}] 팝업 클릭 후 기본 버튼 대기 중... ({attempt+1}/3)")
+                            time.sleep(1)
+                    except Exception as basic_error:
+                        logger.warning(f"[{user_id}] [{action_name}] 팝업 후 기본 버튼 클릭 실패 시도 {attempt+1}: {basic_error}")
+                        time.sleep(1)
+
+                logger.warning(f"[{user_id}] [{action_name}] 팝업 클릭 후 기본 버튼을 찾을 수 없음")
+                return False
+            else:
+                # 일반 클릭 시도
+                page.click(popup_button, timeout=5000, force=True)
+                logger.info(f"[{user_id}] [{action_name}] 날짜 선택 팝업 {button_name} 버튼 클릭 성공! (Playwright)")
+                time.sleep(2)
+                return True
+        else:
+            logger.info(f"[{user_id}] [{action_name}] 날짜 선택 팝업 버튼 없음, 기본 버튼으로 진행")
+
+    except Exception as popup_error:
+        logger.warning(f"[{user_id}] [{action_name}] 날짜 선택 팝업 버튼 확인 실패: {popup_error}")
+
+    # Step 2: 날짜 선택 팝업이 없으면 기본 출근/퇴근 버튼 클릭 시도
+    logger.info(f"[{user_id}] [{action_name}] 2단계: 기본 버튼 클릭 시도")
+
     for attempt in range(max_attempts):
         try:
-            logger.info(f"[{user_id}] [{action_name}] 버튼 클릭 시도 {attempt + 1}/{max_attempts}: {button_selector}")
-            
+            logger.info(f"[{user_id}] [{action_name}] 기본 버튼 클릭 시도 {attempt + 1}/{max_attempts}: {button_selector}")
+
             # 팝업 재정리
             if attempt > 0:
                 close_all_popups(page, user_id, action_name)
                 time.sleep(1)
-            
+
             # 버튼이 존재하는지 확인
-            page.wait_for_selector(button_selector, timeout=30000, state="attached")
-            
-            
+            page.wait_for_selector(button_selector, timeout=DEFAULT_TIMEOUT, state="attached")
+
             # 버튼이 보이는지 확인
             if not page.is_visible(button_selector, timeout=15000):
-                logger.warning(f"[{user_id}] [{action_name}] 버튼이 보이지 않음: {button_selector}")
+                logger.warning(f"[{user_id}] [{action_name}] 기본 버튼이 보이지 않음: {button_selector}")
                 continue
-            
+
             # 스크롤해서 버튼을 화면에 보이게 하기
             page.evaluate(f"""() => {{
                 const btn = document.querySelector('{button_selector}');
@@ -182,7 +295,7 @@ def wait_and_click_button(page, button_selector, user_id, action_name, max_attem
                 }}
             }}""")
             time.sleep(1)
-            
+
             # 강제로 클릭 (JavaScript 사용)
             success = page.evaluate(f"""() => {{
                 const btn = document.querySelector('{button_selector}');
@@ -192,22 +305,22 @@ def wait_and_click_button(page, button_selector, user_id, action_name, max_attem
                 }}
                 return false;
             }}""")
-            
+
             if success:
-                logger.info(f"[{user_id}] [{action_name}] 버튼 클릭 성공 (JavaScript): {button_selector}")
+                logger.info(f"[{user_id}] [{action_name}] 기본 버튼 클릭 성공 (JavaScript): {button_selector}")
                 return True
             else:
                 # 일반 클릭 시도
                 page.click(button_selector, timeout=15000, force=True)
-                logger.info(f"[{user_id}] [{action_name}] 버튼 클릭 성공 (Playwright): {button_selector}")
+                logger.info(f"[{user_id}] [{action_name}] 기본 버튼 클릭 성공 (Playwright): {button_selector}")
                 return True
-                
+
         except Exception as e:
-            logger.warning(f"[{user_id}] [{action_name}] 버튼 클릭 실패 시도 {attempt + 1}: {e}")
+            logger.warning(f"[{user_id}] [{action_name}] 기본 버튼 클릭 실패 시도 {attempt + 1}: {e}")
             if attempt < max_attempts - 1:
                 time.sleep(2)
             continue
-    
+
     return False
 
 def login_and_click_button(user_id, password, button_ids, action_name):
@@ -265,8 +378,8 @@ def login_and_click_button(user_id, password, button_ids, action_name):
             update_heartbeat("context_created", user_id, action_name)
 
             # 컨텍스트 타임아웃 설정 (짧게)
-            context.set_default_timeout(30000)  # 30초 타임아웃
-            context.set_default_navigation_timeout(60000)  # 네비게이션 60초 타임아웃
+            context.set_default_timeout(DEFAULT_TIMEOUT)
+            context.set_default_navigation_timeout(NAVIGATION_TIMEOUT)
 
             logger.info(f"[{user_id}] [{action_name}] 새 페이지 생성...")
 
@@ -313,7 +426,7 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 # 페이지 이동 하트비트
                 update_heartbeat("page_navigation", user_id, action_name)
 
-                page.goto(LOGIN_URL, timeout=600000, wait_until="load")
+                page.goto(LOGIN_URL, timeout=PAGE_LOAD_TIMEOUT, wait_until="load")
                 logger.info(f"[{user_id}] [{action_name}] 페이지 이동 완료")
 
                 # 페이지 이동 완료 하트비트
@@ -323,9 +436,9 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 logger.info(f"[{user_id}] [{action_name}] 로그인 폼 로드 대기 중...")
 
                 try:
-                    page.wait_for_selector("#userId", timeout=60000)  # 60초 대기
-                    page.wait_for_selector("#password", timeout=30000)  # 30초 대기
-                    page.wait_for_selector("button[type=submit]", timeout=30000)  # 30초 대기
+                    page.wait_for_selector("#userId", timeout=NAVIGATION_TIMEOUT)
+                    page.wait_for_selector("#password", timeout=DEFAULT_TIMEOUT)
+                    page.wait_for_selector("button[type=submit]", timeout=DEFAULT_TIMEOUT)
                     logger.info(f"[{user_id}] [{action_name}] 로그인 폼 로드 완료")
                 except Exception as selector_error:
                     # 로그인 폼 로드 실패 시 디버깅 정보 수집
@@ -402,7 +515,7 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 # 페이지 로드 상태 대기 하트비트
                 update_heartbeat("page_load_wait", user_id, action_name)
 
-                page.wait_for_load_state("load", timeout=600000)
+                page.wait_for_load_state("load", timeout=PAGE_LOAD_TIMEOUT)
                 logger.info(f"[{user_id}] [{action_name}] 페이지 로드 완료")
 
                 # 페이지 로드 완료 하트비트
@@ -515,14 +628,16 @@ def login_and_click_button(user_id, password, button_ids, action_name):
         except:
             pass
 
-# 종료 시그널 핸들러
-def shutdown_handler(signum, frame):
-    logging.getLogger('auto_chultae').info("종료 신호를 수신했습니다.")
-    sys.exit(0)
+# 크롤링 전용 모듈 - 시그널 핸들러 불필요 (워치독에서 관리)
 
 def process_users(button_ids, action_name):
     """사용자 처리 함수 (단순 실행)"""
-    for user_info in USERS:
+    users = get_users()
+    if not users:
+        logger.error("활성 사용자를 찾을 수 없습니다")
+        return
+
+    for user_info in users:
         user_id = user_info["user_id"]
         password = user_info["password"]
 
@@ -535,12 +650,33 @@ def process_users(button_ids, action_name):
 
             login_and_click_button(user_id, password, button_ids, action_name)
             logger.info(f"[{user_id}] [{action_name}] 성공")
+            # 성공으로 DB에 기록
+            db_manager.log_attendance(user_id, action_name, "success")
 
         except Exception as e:
-            if "이미 출근 완료" in str(e) or "이미 처리 완료" in str(e):
+            if "이미 출근 완료" in str(e) or "이미 처리 완료" in str(e) or "이미" in str(e):
                 logger.info(f"[{user_id}] [{action_name}] {e}")
+                # 이미 완료된 상태로 DB에 기록
+                db_manager.log_attendance(user_id, action_name, "already_done", str(e))
             else:
                 logger.error(f"[{user_id}] [{action_name}] 처리 중 오류: {e}")
+
+                # 스크린샷과 HTML 경로 추출 (에러 메시지에서)
+                screenshot_path = None
+                html_path = None
+                error_msg = str(e)
+
+                # 간단한 경로 추출 (개선 가능)
+                if "screenshots/" in error_msg:
+                    lines = error_msg.split('\n')
+                    for line in lines:
+                        if "screenshots/" in line and line.endswith(".png"):
+                            screenshot_path = line.split(":")[-1].strip()
+                        elif "screenshots/" in line and line.endswith(".html"):
+                            html_path = line.split(":")[-1].strip()
+
+                # 실패로 DB에 기록
+                db_manager.log_attendance(user_id, action_name, "failed", error_msg, screenshot_path, html_path)
 
         logger.info(f"=== {user_id} 처리 완료 ===\n")
 
@@ -556,26 +692,29 @@ def punch_out():
     process_users(PUNCH_OUT_BUTTON_IDS, "punch_out")
     logger.info("===== 퇴근 처리 완료 =====")
 
-def main():
-    """크롤링 전용 메인 함수 (직접 호출용)"""
-
-    # 시그널 핸들러 등록
-    signal.signal(signal.SIGINT, shutdown_handler)
-    signal.signal(signal.SIGTERM, shutdown_handler)
-
-    logger.info("=" * 50)
-    logger.info("크롤링 시스템 직접 실행")
-
-    # 초기 하트비트
-    update_heartbeat("system_startup")
-
-    logger.info("테스트용 출근 처리 실행")
-    punch_in()
-
-    logger.info("테스트용 퇴근 처리 실행")
-    punch_out()
-
-    logger.info("크롤링 테스트 완료")
+# 이 파일은 크롤링 함수만 제공합니다.
+# 실행은 워치독(watchdog.py)에서 관리됩니다.
+#
+# 직접 테스트 실행:
+# python -c "from auto_chultae import punch_in, punch_out; punch_in()"
+# python -c "from auto_chultae import punch_in, punch_out; punch_out()"
 
 if __name__ == '__main__':
-    main()
+    # 직접 실행 시에만 DB 연결 및 테스트 실행
+    logger.info("=" * 50)
+    logger.info("Auto Chultae 크롤링 시스템 직접 실행")
+
+    if not db_manager.test_connection():
+        logger.warning("데이터베이스 연결 실패! 로그는 DB에 저장되지 않습니다.")
+
+    import sys
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "punch_in":
+            punch_in()
+        elif sys.argv[1] == "punch_out":
+            punch_out()
+        else:
+            print("사용법: python auto_chultae.py [punch_in|punch_out]")
+    else:
+        print("사용법: python auto_chultae.py [punch_in|punch_out]")
+        print("또는: python -c \"from auto_chultae import punch_in; punch_in()\"")

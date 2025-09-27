@@ -2,33 +2,36 @@
 
 cd "$(dirname "$0")"
 
-echo "출근 관리 시작!! (with Watchdog)"
+echo "출근 관리 시스템 시작!! (독립 서버 모드)"
 
-# 기존 프로세스 확인 (워치독과 메인 프로그램 모두)
-MAIN_RUNNING=false
+# 기존 프로세스 확인
+MAIN_SERVER_RUNNING=false
 WATCHDOG_RUNNING=false
 
-if [ -f "auto_chultae.pid" ]; then
-    PID=$(cat auto_chultae.pid)
+if [ -f "main_server.pid" ]; then
+    PID=$(cat main_server.pid)
     if ps -p $PID > /dev/null 2>&1; then
-        MAIN_RUNNING=true
+        MAIN_SERVER_RUNNING=true
     fi
 fi
 
-if pgrep -f "python.*watchdog.py" > /dev/null; then
-    WATCHDOG_RUNNING=true
+if [ -f "watchdog.pid" ]; then
+    PID=$(cat watchdog.pid)
+    if ps -p $PID > /dev/null 2>&1; then
+        WATCHDOG_RUNNING=true
+    fi
 fi
 
-if [ "$MAIN_RUNNING" = true ] || [ "$WATCHDOG_RUNNING" = true ]; then
+if [ "$MAIN_SERVER_RUNNING" = true ] || [ "$WATCHDOG_RUNNING" = true ]; then
     echo "이미 실행 중입니다:"
-    [ "$MAIN_RUNNING" = true ] && echo "  - 메인 프로그램 (PID: $(cat auto_chultae.pid))"
-    [ "$WATCHDOG_RUNNING" = true ] && echo "  - 워치독"
+    [ "$MAIN_SERVER_RUNNING" = true ] && echo "  - 메인 서버 (PID: $(cat main_server.pid))"
+    [ "$WATCHDOG_RUNNING" = true ] && echo "  - 워치독 서버 (PID: $(cat watchdog.pid))"
     echo "종료하려면 ./stop.sh를 실행하세요"
     exit 1
 fi
 
 # 기존 PID 파일 정리
-rm -f auto_chultae.pid watchdog.pid
+rm -f main_server.pid watchdog.pid
 
 # 로그 디렉토리 생성
 mkdir -p logs
@@ -44,17 +47,35 @@ else
     echo "가상환경을 찾을 수 없습니다. 시스템 Python을 사용합니다."
 fi
 
-echo "워치독 시작 중..."
-echo "워치독이 메인 프로그램을 모니터링하며 무한 대기 시 자동 재시작합니다."
+echo ""
+echo "🚀 메인 서버 시작 중..."
+echo "   - 크롤링 및 출퇴근 처리 담당"
+echo "   - HTTP API 서버로 실행"
 
-# nohup으로 워치독 백그라운드 실행
-nohup python3 watchdog.py > watchdog.out 2>&1 &
+# 메인 서버 백그라운드 실행
+nohup python3 main_server.py > main_server.out 2>&1 &
+MAIN_PID=$!
+echo $MAIN_PID > main_server.pid
 
-# 워치독 PID 저장
-echo $! > watchdog.pid
+# 메인 서버 시작 대기
+sleep 3
 
 echo ""
-echo "✅ 출근 관리 시스템 시작 완료 (Watchdog PID: $!)"
+echo "🕐 워치독 서버 시작 중..."
+echo "   - 스케줄링 및 명령 전송 담당"
+echo "   - 메인 서버와 HTTP 통신"
+
+# 워치독 서버 백그라운드 실행
+nohup python3 watchdog.py > watchdog.out 2>&1 &
+WATCHDOG_PID=$!
+echo $WATCHDOG_PID > watchdog.pid
+
+echo ""
+echo "✅ 출근 관리 시스템 시작 완료"
+echo "   📡 메인 서버 (PID: $MAIN_PID) - 크롤링 담당"
+echo "   ⏰ 워치독 서버 (PID: $WATCHDOG_PID) - 스케줄링 담당"
+echo ""
 echo "📁 로그 확인: logs/ 디렉토리"
+echo "🔗 헬스체크: curl http://localhost:8080/api/health"
 echo "🛑 종료 방법: ./stop.sh 실행"
 echo ""

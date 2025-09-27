@@ -45,8 +45,11 @@ PROXY_CONFIG = {
 }
 
 # 상수 정의
-LOGIN_URL = os.getenv("LOGIN_URL", "https://gw.metabuild.co.kr/ekp/view/login/userLogin")
-ATTEND_PAGE_URL = os.getenv("ATTEND_PAGE_URL", "https://gw.metabuild.co.kr/ekp/main/home/homGwMain")
+LOGIN_URL = os.getenv("LOGIN_URL")
+ATTEND_PAGE_URL = os.getenv("ATTEND_PAGE_URL")
+
+if not LOGIN_URL or not ATTEND_PAGE_URL:
+    raise ValueError("LOGIN_URL과 ATTEND_PAGE_URL 환경변수가 필수입니다.")
 PUNCH_OUT_BUTTON_IDS = ["#ptlAttendRegist_btn_lvof3", "#ptlAttendRegist_btn_lvof2"]
 
 def close_all_popups(page, user_id, action_name):
