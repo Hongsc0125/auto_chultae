@@ -50,10 +50,10 @@ fi
 echo ""
 echo "🚀 메인 서버 시작 중..."
 echo "   - 크롤링 및 출퇴근 처리 담당"
-echo "   - HTTP API 서버로 실행"
+echo "   - Gunicorn WSGI 서버로 실행 (프로덕션)"
 
-# 메인 서버 백그라운드 실행
-nohup python3 main_server.py > main_server.out 2>&1 &
+# 메인 서버 백그라운드 실행 (Gunicorn 사용)
+nohup gunicorn -c gunicorn.conf.py main_server:app > main_server.out 2>&1 &
 MAIN_PID=$!
 echo $MAIN_PID > main_server.pid
 
@@ -76,6 +76,6 @@ echo "   📡 메인 서버 (PID: $MAIN_PID) - 크롤링 담당"
 echo "   ⏰ 워치독 서버 (PID: $WATCHDOG_PID) - 스케줄링 담당"
 echo ""
 echo "📁 로그 확인: logs/ 디렉토리"
-echo "🔗 헬스체크: curl http://localhost:8080/api/health"
+echo "🔗 헬스체크: curl http://localhost:9000/api/health"
 echo "🛑 종료 방법: ./stop.sh 실행"
 echo ""

@@ -239,8 +239,21 @@ def main():
     initial_check_thread.start()
 
     try:
-        # Flask 앱 실행 (프로덕션 모드)
-        app.run(host=host, port=port, debug=False, use_reloader=False)
+        # 개발 모드와 프로덕션 모드 구분
+        if os.getenv('FLASK_ENV') == 'development':
+            # 개발 모드: Flask 내장 서버 사용
+            logger.info("개발 모드로 Flask 내장 서버 실행")
+            app.run(host=host, port=port, debug=True, use_reloader=False)
+        else:
+            # 프로덕션 모드: gunicorn으로 실행되어야 함
+            logger.info("프로덕션 모드 - gunicorn으로 실행해야 합니다")
+            logger.info(f"명령어: gunicorn -c gunicorn.conf.py main_server:app")
+
+            # gunicorn이 이 앱을 로드할 때는 여기서 실행하지 않음
+            # 하지만 직접 실행된 경우에는 경고 후 기본 서버로 실행
+            if __name__ == '__main__':
+                logger.warning("프로덕션 환경에서는 gunicorn 사용을 권장합니다")
+                app.run(host=host, port=port, debug=False, use_reloader=False)
     except KeyboardInterrupt:
         logger.info("메인 서버 종료")
     except Exception as e:
