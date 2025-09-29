@@ -60,7 +60,7 @@ def send_command_to_main_server(command):
             raise ValueError("MAIN_SERVER_URL 환경변수가 필수입니다.")
         response = requests.post(f"{main_server_url}/api/command",
                                json={"command": command},
-                               timeout=30)
+                               timeout=300)  # 5분 타임아웃 (크롤링 작업 고려)
 
         if response.status_code == 200:
             logger.info(f"{command} 명령 전송 성공")
@@ -92,7 +92,7 @@ def execute_punch_out():
 
 # 스케줄링 함수들
 def punch_in_with_retry():
-    """출근 시간대 재시도 로직 (08:00-08:40)"""
+    """출근 시간대 재시도 로직 (08:00-08:40) - 오늘자 성공 이력 확인"""
     now = datetime.now()
     current_time = now.time()
 
@@ -101,18 +101,33 @@ def punch_in_with_retry():
         logger.debug(f"출근 시간대가 아님: {current_time}")
         return
 
-    logger.info(f"출근 처리 시도 시작 ({current_time})")
+    # 모든 활성 사용자의 오늘자 출근 성공 이력 확인
+    users = get_users()
+    users_needing_punch_in = []
+
+    for user in users:
+        user_id = user["user_id"]
+        has_success_today = db_manager.has_today_success(user_id, "punch_in")
+
+        if has_success_today:
+            logger.info(f"[{user_id}] 오늘자 출근 성공 이력 있음 - 스킵")
+        else:
+            users_needing_punch_in.append(user_id)
+
+    if not users_needing_punch_in:
+        logger.info("모든 사용자가 오늘 이미 출근 완료 - 실행하지 않음")
+        return
+
+    logger.info(f"출근 처리 시도 시작 ({current_time}) - 대상 사용자: {users_needing_punch_in}")
     success = execute_punch_in()
 
     if not success:
         # 실패 로그 기록
         if current_time > dt_time(8, 35):
-            users = get_users()
-            failed_users = [user["user_id"] for user in users]
-            logger.warning(f"출근 처리 실패 - 대상 사용자: {failed_users}")
+            logger.warning(f"출근 처리 실패 - 대상 사용자: {users_needing_punch_in}")
 
 def punch_out_with_retry():
-    """퇴근 시간대 재시도 로직 (18:00-19:00)"""
+    """퇴근 시간대 재시도 로직 (18:00-19:00) - 오늘자 성공 이력 확인"""
     now = datetime.now()
     current_time = now.time()
 
@@ -121,15 +136,30 @@ def punch_out_with_retry():
         logger.debug(f"퇴근 시간대가 아님: {current_time}")
         return
 
-    logger.info(f"퇴근 처리 시도 시작 ({current_time})")
+    # 모든 활성 사용자의 오늘자 퇴근 성공 이력 확인
+    users = get_users()
+    users_needing_punch_out = []
+
+    for user in users:
+        user_id = user["user_id"]
+        has_success_today = db_manager.has_today_success(user_id, "punch_out")
+
+        if has_success_today:
+            logger.info(f"[{user_id}] 오늘자 퇴근 성공 이력 있음 - 스킵")
+        else:
+            users_needing_punch_out.append(user_id)
+
+    if not users_needing_punch_out:
+        logger.info("모든 사용자가 오늘 이미 퇴근 완료 - 실행하지 않음")
+        return
+
+    logger.info(f"퇴근 처리 시도 시작 ({current_time}) - 대상 사용자: {users_needing_punch_out}")
     success = execute_punch_out()
 
     if not success:
         # 실패 로그 기록
         if current_time > dt_time(18, 55):
-            users = get_users()
-            failed_users = [user["user_id"] for user in users]
-            logger.warning(f"퇴근 처리 실패 - 대상 사용자: {failed_users}")
+            logger.warning(f"퇴근 처리 실패 - 대상 사용자: {users_needing_punch_out}")
 
 def main():
     """워치독 메인 함수 - 스케줄링만 담당"""

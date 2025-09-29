@@ -315,6 +315,32 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def has_today_success(self, user_id, action_type):
+        """오늘자 성공 출퇴근 이력이 있는지 확인"""
+        session = self.get_session()
+        try:
+            today = datetime.now().strftime('%Y-%m-%d')
+            result = session.execute(
+                text("""
+                    SELECT COUNT(*) as count
+                    FROM attendance_logs
+                    WHERE user_id = :user_id
+                    AND action_type = :action_type
+                    AND status IN ('success', 'already_done')
+                    AND DATE(timestamp) = :today
+                """),
+                {"user_id": user_id, "action_type": action_type, "today": today}
+            )
+
+            count = result.fetchone()
+            return count[0] > 0 if count else False
+
+        except SQLAlchemyError as e:
+            logger.error(f"오늘자 성공 이력 확인 실패: {e}")
+            return False
+        finally:
+            session.close()
+
     def get_active_users(self):
         """활성 사용자 목록 조회"""
         session = self.get_session()
