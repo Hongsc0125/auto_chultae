@@ -152,14 +152,23 @@ def register():
 def login():
     """로그인"""
     try:
-        data = request.get_json()
+        # 요청 헤더 확인
+        if not request.is_json:
+            logger.error(f"로그인 요청 헤더 문제: Content-Type = {request.content_type}")
+            return jsonify({'error': 'Content-Type은 application/json이어야 합니다'}), 400
+
+        data = request.get_json(force=True)  # force=True로 강제 파싱
         if not data:
+            logger.error("로그인 요청 데이터가 비어있음")
             return jsonify({'error': 'JSON 데이터가 필요합니다'}), 400
 
         user_id = data.get('user_id')
         password = data.get('password')
 
+        logger.info(f"로그인 시도: user_id={user_id}")
+
         if not all([user_id, password]):
+            logger.error(f"로그인 필드 누락: user_id={user_id}, password={'있음' if password else '없음'}")
             return jsonify({'error': '사용자 ID와 비밀번호를 입력해주세요'}), 400
 
         # 사용자 인증 (기존 users 테이블 사용)
@@ -254,7 +263,7 @@ def get_today_status():
                     SELECT action_type, status, attempt_time
                     FROM attendance_logs
                     WHERE user_id = :user_id AND DATE(attempt_time) = :today
-                    AND status = 'success'
+                    AND status IN ('success', 'already_done')
                     ORDER BY attempt_time DESC
                 """),
                 {"user_id": current_user, "today": today}
