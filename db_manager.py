@@ -77,14 +77,15 @@ class DatabaseManager:
             session.close()
 
     def log_attendance(self, user_id, action_type, status, error_message=None, screenshot_path=None, html_path=None):
-        """출퇴근 기록 저장"""
+        """출퇴근 기록 저장 - 생성된 log ID 반환"""
         session = self.get_session()
         try:
-            session.execute(
+            result = session.execute(
                 text("""
                     INSERT INTO attendance_logs
                     (user_id, action_type, status, attempt_time, error_message, screenshot_path, html_path)
                     VALUES (:user_id, :action_type, :status, :attempt_time, :error_message, :screenshot_path, :html_path)
+                    RETURNING id
                 """),
                 {
                     "user_id": user_id,
@@ -96,14 +97,16 @@ class DatabaseManager:
                     "html_path": html_path
                 }
             )
+
+            log_id = result.fetchone()[0]
             session.commit()
-            logger.debug(f"출퇴근 기록 저장: {user_id} - {action_type} - {status}")
-            return True
+            logger.debug(f"출퇴근 기록 저장: {user_id} - {action_type} - {status} (ID: {log_id})")
+            return log_id
 
         except SQLAlchemyError as e:
             session.rollback()
             logger.error(f"출퇴근 기록 저장 실패: {e}")
-            return False
+            return None
         finally:
             session.close()
 
@@ -175,22 +178,23 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def legacy_update_heartbeat(self, stage, user_id=None, action_type=None, pid=None):
+    def legacy_update_heartbeat(self, stage, user_id=None, action_type=None, pid=None, attendance_log_id=None):
         """기존 하트비트 상태 업데이트 (하위 호환용)"""
         session = self.get_session()
         try:
             session.execute(
                 text("""
                     INSERT INTO heartbeat_status
-                    (stage, user_id, action_type, pid, timestamp)
-                    VALUES (:stage, :user_id, :action_type, :pid, :timestamp)
+                    (stage, user_id, action_type, pid, timestamp, attendance_log_id)
+                    VALUES (:stage, :user_id, :action_type, :pid, :timestamp, :attendance_log_id)
                 """),
                 {
                     "stage": stage,
                     "user_id": user_id,
                     "action_type": action_type,
                     "pid": pid,
-                    "timestamp": datetime.now()
+                    "timestamp": datetime.now(),
+                    "attendance_log_id": attendance_log_id
                 }
             )
             session.commit()
@@ -327,7 +331,7 @@ class DatabaseManager:
                     WHERE user_id = :user_id
                     AND action_type = :action_type
                     AND status IN ('success', 'already_done')
-                    AND DATE(timestamp) = :today
+                    AND DATE(attempt_time) = :today
                 """),
                 {"user_id": user_id, "action_type": action_type, "today": today}
             )

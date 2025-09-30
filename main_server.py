@@ -10,10 +10,15 @@ import logging
 import signal
 import threading
 import time
-from datetime import datetime
-from flask import Flask, request, jsonify
+import hashlib
+import bcrypt
+from datetime import datetime, timedelta
+from flask import Flask, request, jsonify, make_response
+from flask_cors import CORS
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from dotenv import load_dotenv
 from db_manager import db_manager
+from sqlalchemy import text
 
 # .env 파일 로드
 load_dotenv()
@@ -44,8 +49,39 @@ logger = setup_logging()
 # Flask 앱 생성
 app = Flask(__name__)
 
+# CORS 설정 (Vue.js 프론트엔드와 통신용)
+CORS(app,
+     origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:5174"],
+     allow_headers=["Content-Type", "Authorization"],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+     supports_credentials=True)
+
+# CORS Preflight 요청 처리
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add('Access-Control-Allow-Headers', "*")
+        response.headers.add('Access-Control-Allow-Methods', "*")
+        return response
+
+# JWT 설정
+app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key-change-this-in-production')
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
+jwt = JWTManager(app)
+
 # 전역 변수
 shutdown_flag = threading.Event()
+
+# 웹 API 헬퍼 함수들
+def hash_password(password):
+    """비밀번호 해시화"""
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+def verify_password(password, hashed):
+    """비밀번호 검증"""
+    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
 def update_server_heartbeat():
     """서버 하트비트 업데이트"""
@@ -66,6 +102,270 @@ def heartbeat_worker():
     while not shutdown_flag.is_set():
         update_server_heartbeat()
         time.sleep(30)  # 30초마다 하트비트 업데이트
+
+# 웹 API 라우트들
+@app.route('/api/web/auth/register', methods=['POST'])
+def register():
+    """회원가입"""
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id')
+        password = data.get('password')
+        email = data.get('email')
+
+        if not all([user_id, password, email]):
+            return jsonify({'error': '모든 필드를 입력해주세요'}), 400
+
+        # 사용자 중복 체크
+        session = db_manager.get_session()
+        try:
+            result = session.execute(
+                text("SELECT COUNT(*) as count FROM users WHERE user_id = :user_id"),
+                {"user_id": user_id}
+            )
+            if result.fetchone().count > 0:
+                return jsonify({'error': '이미 존재하는 사용자 ID입니다'}), 400
+
+            # 사용자 생성 (비밀번호 평문 저장 - 기존 시스템과 호환)
+            session.execute(
+                text("INSERT INTO users (user_id, password, email, is_active, created_at, updated_at) VALUES (:user_id, :password, :email, :is_active, :created_at, :updated_at)"),
+                {
+                    "user_id": user_id,
+                    "password": password,  # 평문 저장 (기존 시스템과 호환)
+                    "email": email,
+                    "is_active": True,
+                    "created_at": datetime.now(),
+                    "updated_at": datetime.now()
+                }
+            )
+            session.commit()
+            return jsonify({'success': True, 'message': '회원가입이 완료되었습니다'})
+
+        finally:
+            session.close()
+
+    except Exception as e:
+        logger.error(f"회원가입 오류: {e}")
+        return jsonify({'error': '회원가입 중 오류가 발생했습니다'}), 500
+
+@app.route('/api/web/auth/login', methods=['POST'])
+def login():
+    """로그인"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'JSON 데이터가 필요합니다'}), 400
+
+        user_id = data.get('user_id')
+        password = data.get('password')
+
+        if not all([user_id, password]):
+            return jsonify({'error': '사용자 ID와 비밀번호를 입력해주세요'}), 400
+
+        # 사용자 인증 (기존 users 테이블 사용)
+        session = db_manager.get_session()
+        try:
+            result = session.execute(
+                text("SELECT user_id, password, email FROM users WHERE user_id = :user_id AND is_active = true"),
+                {"user_id": user_id}
+            )
+            user = result.fetchone()
+
+            if not user or user.password != password:  # 평문 비교 (기존 시스템과 호환)
+                return jsonify({'error': '사용자 ID 또는 비밀번호가 잘못되었습니다'}), 401
+
+            # JWT 토큰 생성
+            access_token = create_access_token(identity=user_id)
+
+            return jsonify({
+                'success': True,
+                'access_token': access_token,
+                'user': {
+                    'id': user.user_id,
+                    'username': user.user_id,
+                    'email': user.email
+                }
+            })
+
+        finally:
+            session.close()
+
+    except Exception as e:
+        logger.error(f"로그인 오류: {e}")
+        return jsonify({'error': '로그인 중 오류가 발생했습니다'}), 500
+
+@app.route('/api/web/server/status', methods=['GET'])
+@jwt_required()
+def get_server_status():
+    """서버 상태 조회"""
+    try:
+        session = db_manager.get_session()
+        try:
+            # 최근 하트비트 상태 조회 (5분 이내)
+            five_minutes_ago = datetime.now() - timedelta(minutes=5)
+
+            result = session.execute(
+                text("""
+                    SELECT stage, COUNT(*) as count
+                    FROM heartbeat_status
+                    WHERE timestamp > :five_minutes_ago
+                    GROUP BY stage
+                """),
+                {"five_minutes_ago": five_minutes_ago}
+            )
+            statuses = result.fetchall()
+
+            status = {
+                'main': False,
+                'watchdog': False
+            }
+
+            # 최근 활동이 있으면 온라인으로 간주
+            for s in statuses:
+                if 'main' in s.stage.lower() or 'server' in s.stage.lower():
+                    status['main'] = True
+                elif 'watchdog' in s.stage.lower():
+                    status['watchdog'] = True
+
+            # 기본적으로 현재 요청이 성공하면 메인 서버는 온라인
+            status['main'] = True
+
+            return jsonify({'success': True, 'status': status})
+
+        finally:
+            session.close()
+
+    except Exception as e:
+        logger.error(f"서버 상태 조회 오류: {e}")
+        return jsonify({'error': '서버 상태 조회 중 오류가 발생했습니다'}), 500
+
+@app.route('/api/web/user/summary', methods=['GET'])
+@jwt_required()
+def get_today_status():
+    """오늘의 출근 상태 조회"""
+    try:
+        current_user = get_jwt_identity()
+        session = db_manager.get_session()
+        try:
+            today = datetime.now().strftime('%Y-%m-%d')
+
+            result = session.execute(
+                text("""
+                    SELECT action_type, status, attempt_time
+                    FROM attendance_logs
+                    WHERE user_id = :user_id AND DATE(attempt_time) = :today
+                    AND status = 'success'
+                    ORDER BY attempt_time DESC
+                """),
+                {"user_id": current_user, "today": today}
+            )
+            logs = result.fetchall()
+
+            status = {
+                'punchIn': '',
+                'punchOut': ''
+            }
+
+            for log in logs:
+                if log.action_type == 'punch_in' and not status['punchIn']:
+                    status['punchIn'] = log.attempt_time.strftime('%H:%M')
+                elif log.action_type == 'punch_out' and not status['punchOut']:
+                    status['punchOut'] = log.attempt_time.strftime('%H:%M')
+
+            return jsonify({'success': True, 'status': status})
+
+        finally:
+            session.close()
+
+    except Exception as e:
+        logger.error(f"오늘 상태 조회 오류: {e}")
+        return jsonify({'error': '오늘 상태 조회 중 오류가 발생했습니다'}), 500
+
+@app.route('/api/web/user/attendance', methods=['GET'])
+@jwt_required()
+def get_logs():
+    """로그 조회"""
+    try:
+        current_user = get_jwt_identity()
+        limit = request.args.get('limit', 50, type=int)
+
+        session = db_manager.get_session()
+        try:
+            result = session.execute(
+                text("""
+                    SELECT id, user_id, action_type, status, error_message, attempt_time
+                    FROM attendance_logs
+                    WHERE user_id = :user_id
+                    ORDER BY attempt_time DESC
+                    LIMIT :limit
+                """),
+                {"user_id": current_user, "limit": limit}
+            )
+            logs = result.fetchall()
+
+            log_list = []
+            for log in logs:
+                log_list.append({
+                    'id': log.id,
+                    'user_id': log.user_id,
+                    'action_type': log.action_type,
+                    'status': log.status,
+                    'message': log.error_message or '',
+                    'timestamp': log.attempt_time.isoformat()
+                })
+
+            return jsonify({'success': True, 'logs': log_list})
+
+        finally:
+            session.close()
+
+    except Exception as e:
+        logger.error(f"로그 조회 오류: {e}")
+        return jsonify({'error': '로그 조회 중 오류가 발생했습니다'}), 500
+
+@app.route('/api/web/user/attendance/<int:attendance_id>/heartbeat', methods=['GET'])
+@jwt_required()
+def get_heartbeats(attendance_id):
+    """특정 attendance_log_id에 연결된 heartbeat 로그 조회"""
+    try:
+        log_id = attendance_id
+
+        if not log_id:
+            return jsonify({'error': 'attendance_id가 필요합니다'}), 400
+
+        session = db_manager.get_session()
+        try:
+            result = session.execute(
+                text("""
+                    SELECT id, stage, user_id, action_type, pid, timestamp, attendance_log_id
+                    FROM heartbeat_status
+                    WHERE attendance_log_id = :log_id
+                    ORDER BY timestamp ASC
+                """),
+                {"log_id": log_id}
+            )
+            heartbeats = result.fetchall()
+
+            heartbeat_list = []
+            for heartbeat in heartbeats:
+                heartbeat_list.append({
+                    'id': heartbeat.id,
+                    'stage': heartbeat.stage,
+                    'user_id': heartbeat.user_id,
+                    'action_type': heartbeat.action_type,
+                    'pid': heartbeat.pid,
+                    'timestamp': heartbeat.timestamp.isoformat(),
+                    'attendance_log_id': heartbeat.attendance_log_id
+                })
+
+            return jsonify({'success': True, 'heartbeats': heartbeat_list})
+
+        finally:
+            session.close()
+
+    except Exception as e:
+        logger.error(f"하트비트 조회 오류: {e}")
+        return jsonify({'error': '하트비트 조회 중 오류가 발생했습니다'}), 500
 
 @app.route('/api/health', methods=['GET'])
 def health_check():

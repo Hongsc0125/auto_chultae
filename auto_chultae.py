@@ -32,7 +32,7 @@ def setup_logging():
 logger = setup_logging()
 
 # 하트비트 함수
-def update_heartbeat(stage="unknown", user_id=None, action=None):
+def update_heartbeat(stage="unknown", user_id=None, action=None, attendance_log_id=None):
     """하트비트 업데이트 (독립 서버 모드에서는 DB만 업데이트)"""
     try:
         # 독립 서버 모드에서는 DB 하트비트만 사용
@@ -40,7 +40,8 @@ def update_heartbeat(stage="unknown", user_id=None, action=None):
             stage=stage,
             user_id=user_id,
             action_type=action,
-            pid=os.getpid()
+            pid=os.getpid(),
+            attendance_log_id=attendance_log_id
         )
 
         # 상세 로그
@@ -60,6 +61,63 @@ def get_users():
     except Exception as e:
         logger.error(f"사용자 목록 조회 실패: {e}")
         return []
+
+def create_attendance_record(user_id, action_type):
+    """출석 기록을 사전에 생성하고 ID 반환"""
+    try:
+        session = db_manager.get_session()
+        try:
+            from sqlalchemy import text
+            from datetime import datetime
+
+            now = datetime.now()
+            result = session.execute(
+                text("""
+                    INSERT INTO attendance_logs (user_id, action_type, status, attempt_time, created_at)
+                    VALUES (:user_id, :action_type, 'in_progress', :attempt_time, :created_at)
+                    RETURNING id
+                """),
+                {
+                    "user_id": user_id,
+                    "action_type": action_type,
+                    "attempt_time": now,
+                    "created_at": now
+                }
+            )
+            attendance_id = result.fetchone()[0]
+            session.commit()
+            return attendance_id
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"출석 기록 생성 실패: {e}")
+        return None
+
+def update_attendance_record(attendance_id, status, error_message=None):
+    """출석 기록 상태 업데이트"""
+    try:
+        session = db_manager.get_session()
+        try:
+            from sqlalchemy import text
+            from datetime import datetime
+
+            session.execute(
+                text("""
+                    UPDATE attendance_logs
+                    SET status = :status, error_message = :error_message
+                    WHERE id = :attendance_id
+                """),
+                {
+                    "attendance_id": attendance_id,
+                    "status": status,
+                    "error_message": error_message
+                }
+            )
+            session.commit()
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error(f"출석 기록 업데이트 실패: {e}")
 
 # 프록시 설정
 PROXY_CONFIG = {
@@ -187,6 +245,33 @@ def close_all_popups(page, user_id, action_name):
         
     except Exception as e:
         logger.warning(f"[{user_id}] [{action_name}] 팝업 처리 중 오류: {e}")
+
+def check_punch_out_completed(page, user_id, action_name, attendance_log_id=None):
+    """퇴근 완료 상태 확인 함수"""
+    try:
+        # 퇴근 완료 버튼이 있는지 확인
+        completed_button_selector = 'button[class*="btn_punch_on"][id*="ptlAttendRegist_btn_lvof2"]'
+
+        update_heartbeat("checking_punch_out_status", user_id, action_name, attendance_log_id)
+        logger.info(f"[{user_id}] [{action_name}] 퇴근 완료 상태 확인 중...")
+
+        if page.is_visible(completed_button_selector, timeout=5000):
+            button_text = page.text_content(completed_button_selector)
+            logger.info(f"[{user_id}] [{action_name}] 발견된 버튼 텍스트: '{button_text}'")
+
+            if button_text and "퇴근완료" in button_text:
+                logger.info(f"[{user_id}] [{action_name}] ✅ 퇴근이 이미 완료되어 있습니다!")
+                update_heartbeat("punch_out_already_completed", user_id, action_name, attendance_log_id)
+                return True
+
+        logger.info(f"[{user_id}] [{action_name}] 퇴근 완료 버튼을 찾지 못했거나 아직 완료되지 않음")
+        update_heartbeat("punch_out_not_completed_yet", user_id, action_name, attendance_log_id)
+        return False
+
+    except Exception as e:
+        logger.warning(f"[{user_id}] [{action_name}] 퇴근 완료 상태 확인 실패: {e}")
+        update_heartbeat("punch_out_status_check_failed", user_id, action_name, attendance_log_id)
+        return False
 
 def wait_and_click_button(page, button_selector, user_id, action_name, max_attempts=5):
     """버튼 클릭을 재시도하는 함수 - 날짜 선택 팝업 우선 확인"""
@@ -323,12 +408,16 @@ def wait_and_click_button(page, button_selector, user_id, action_name, max_attem
 
     return False
 
-def login_and_click_button(user_id, password, button_ids, action_name):
+def login_and_click_button(user_id, password, button_ids, action_name, attendance_log_id=None):
     start_time = time.time()
     logger.info(f"[{user_id}] [{action_name}] 프로세스 시작")
 
+    # 로컬 하트비트 함수 (attendance_log_id가 자동으로 포함됨)
+    def heartbeat(stage):
+        update_heartbeat(stage, user_id, action_name, attendance_log_id)
+
     # 시작 하트비트
-    update_heartbeat("process_start", user_id, action_name)
+    heartbeat("process_start")
     
     browser = None
     context = None
@@ -338,7 +427,7 @@ def login_and_click_button(user_id, password, button_ids, action_name):
             logger.info(f"[{user_id}] [{action_name}] Playwright 초기화 완료")
 
             # Playwright 초기화 하트비트
-            update_heartbeat("playwright_init", user_id, action_name)
+            heartbeat("playwright_init")
 
             logger.info(f"[{user_id}] [{action_name}] 브라우저 실행 시작...")
             browser = p.chromium.launch(
@@ -362,7 +451,7 @@ def login_and_click_button(user_id, password, button_ids, action_name):
             logger.info(f"[{user_id}] [{action_name}] 브라우저 실행 완료")
 
             # 브라우저 실행 완료 하트비트
-            update_heartbeat("browser_started", user_id, action_name)
+            heartbeat("browser_started")
 
             logger.info(f"[{user_id}] [{action_name}] 브라우저 컨텍스트 생성 시작...")
             context = browser.new_context(
@@ -375,7 +464,7 @@ def login_and_click_button(user_id, password, button_ids, action_name):
             logger.info(f"[{user_id}] [{action_name}] 브라우저 컨텍스트 생성 완료")
 
             # 컨텍스트 생성 완료 하트비트
-            update_heartbeat("context_created", user_id, action_name)
+            heartbeat("context_created")
 
             # 컨텍스트 타임아웃 설정 (짧게)
             context.set_default_timeout(DEFAULT_TIMEOUT)
@@ -384,7 +473,7 @@ def login_and_click_button(user_id, password, button_ids, action_name):
             logger.info(f"[{user_id}] [{action_name}] 새 페이지 생성...")
 
             # 페이지 생성 시작 하트비트
-            update_heartbeat("page_creation_start", user_id, action_name)
+            heartbeat("page_creation_start")
 
             # 페이지 생성 재시도 (최대 3번)
             page = None
@@ -395,13 +484,13 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                     logger.info(f"[{user_id}] [{action_name}] 페이지 생성 시도 {attempt + 1}/{max_attempts}")
 
                     # 페이지 생성 시도 하트비트
-                    update_heartbeat(f"page_creation_attempt_{attempt + 1}", user_id, action_name)
+                    heartbeat(f"page_creation_attempt_{attempt + 1}")
 
                     page = context.new_page()
                     logger.info(f"[{user_id}] [{action_name}] 페이지 생성 완료")
 
                     # 페이지 생성 성공 하트비트
-                    update_heartbeat("page_created", user_id, action_name)
+                    heartbeat("page_created")
                     break
                 except Exception as e:
                     if attempt < max_attempts - 1:
@@ -417,20 +506,20 @@ def login_and_click_button(user_id, password, button_ids, action_name):
             
             try:
                 # 로그인 시작 하트비트
-                update_heartbeat("login_start", user_id, action_name)
+                heartbeat("login_start")
 
                 # 로그인
                 logger.info(f"[{user_id}] [{action_name}] 로그인 페이지로 이동: {LOGIN_URL}")
                 logger.info(f"[{user_id}] [{action_name}] 페이지 이동 시작...")
 
                 # 페이지 이동 하트비트
-                update_heartbeat("page_navigation", user_id, action_name)
+                heartbeat("page_navigation")
 
                 page.goto(LOGIN_URL, timeout=PAGE_LOAD_TIMEOUT, wait_until="load")
                 logger.info(f"[{user_id}] [{action_name}] 페이지 이동 완료")
 
                 # 페이지 이동 완료 하트비트
-                update_heartbeat("page_loaded", user_id, action_name)
+                heartbeat("page_loaded")
 
                 # 로그인 폼 요소들이 로드될 때까지 대기
                 logger.info(f"[{user_id}] [{action_name}] 로그인 폼 로드 대기 중...")
@@ -465,7 +554,7 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                     raise selector_error
 
                 # 폼 로드 완료 하트비트
-                update_heartbeat("login_form_loaded", user_id, action_name)
+                heartbeat("login_form_loaded")
 
                 # 추가 안정화 대기
                 time.sleep(2)
@@ -475,19 +564,19 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 logger.info(f"[{user_id}] [{action_name}] 아이디 입력 완료")
 
                 # 아이디 입력 완료 하트비트
-                update_heartbeat("userid_filled", user_id, action_name)
+                heartbeat("userid_filled")
 
                 logger.info(f"[{user_id}] [{action_name}] 비밀번호 입력 시작...")
                 page.fill("#password", password)
                 logger.info(f"[{user_id}] [{action_name}] 비밀번호 입력 완료")
 
                 # 비밀번호 입력 완료 하트비트
-                update_heartbeat("password_filled", user_id, action_name)
+                heartbeat("password_filled")
 
                 logger.info(f"[{user_id}] [{action_name}] 로그인 버튼 클릭 시작...")
 
                 # 로그인 버튼 클릭 시작 하트비트
-                update_heartbeat("login_button_click", user_id, action_name)
+                heartbeat("login_button_click")
 
                 page.click("button[type=submit]")
                 logger.info(f"[{user_id}] [{action_name}] 로그인 버튼 클릭 완료")
@@ -496,7 +585,7 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 logger.info(f"[{user_id}] [{action_name}] 메인 페이지 이동 대기 중...")
 
                 # 메인 페이지 이동 대기 시작 하트비트
-                update_heartbeat("main_page_wait", user_id, action_name)
+                heartbeat("main_page_wait")
 
                 # 메인 페이지 이동 대기 (Playwright 자체 타임아웃 사용)
                 try:
@@ -504,7 +593,7 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                     logger.info(f"[{user_id}] [{action_name}] 메인 페이지 이동 완료")
 
                     # 메인 페이지 이동 완료 하트비트
-                    update_heartbeat("main_page_loaded", user_id, action_name)
+                    heartbeat("main_page_loaded")
 
                 except Exception as e:
                     logger.error(f"[{user_id}] [{action_name}] 메인 페이지 이동 타임아웃: {e}")
@@ -513,39 +602,54 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 logger.info(f"[{user_id}] [{action_name}] 페이지 로드 상태 대기 중...")
 
                 # 페이지 로드 상태 대기 하트비트
-                update_heartbeat("page_load_wait", user_id, action_name)
+                heartbeat("page_load_wait")
 
                 page.wait_for_load_state("load", timeout=PAGE_LOAD_TIMEOUT)
                 logger.info(f"[{user_id}] [{action_name}] 페이지 로드 완료")
 
                 # 페이지 로드 완료 하트비트
-                update_heartbeat("page_load_complete", user_id, action_name)
+                heartbeat("page_load_complete")
 
                 logger.info(f"[{user_id}] [{action_name}] 로그인 성공")
 
                 # 로그인 성공 하트비트
-                update_heartbeat("login_success", user_id, action_name)
+                heartbeat("login_success")
                 
             except Exception as e:
                 logger.error(f"[{user_id}] [{action_name}] 로그인 중 오류 발생: {e}")
                 raise
 
             # 페이지 완전 로드 대기
-            update_heartbeat("page_stabilize_wait", user_id, action_name)
+            heartbeat("page_stabilize_wait")
             time.sleep(3)
 
+            # 퇴근의 경우 먼저 완료 상태 확인
+            if action_name == "punch_out":
+                if check_punch_out_completed(page, user_id, action_name, attendance_log_id):
+                    logger.info(f"[{user_id}] [{action_name}] ✅ 퇴근이 이미 완료되어 있어 작업을 종료합니다")
+                    heartbeat("process_complete")
+                    return True
+
             # 모든 팝업 닫기
-            update_heartbeat("popup_close_start", user_id, action_name)
+            heartbeat("popup_close_start")
             close_all_popups(page, user_id, action_name)
             time.sleep(2)
-            update_heartbeat("popup_close_complete", user_id, action_name)
+            heartbeat("popup_close_complete")
 
             # 바로 버튼 클릭 시도 (테이블 로드 대기 제거)
-            update_heartbeat("button_click_start", user_id, action_name)
+            heartbeat("button_click_start")
             clicked = False
             for btn in button_ids:
                 if wait_and_click_button(page, btn, user_id, action_name):
                     clicked = True
+                    # 버튼 클릭 후 퇴근 완료 상태 재확인
+                    if action_name == "punch_out":
+                        time.sleep(2)  # 상태 변경 대기
+                        if check_punch_out_completed(page, user_id, action_name, attendance_log_id):
+                            logger.info(f"[{user_id}] [{action_name}] ✅ 버튼 클릭 후 퇴근 완료 확인됨")
+                            heartbeat("button_clicked_success")
+                            heartbeat("process_complete")
+                            return True
                     break
 
             if not clicked:
@@ -606,11 +710,11 @@ def login_and_click_button(user_id, password, button_ids, action_name):
                 raise Exception(error_msg)
 
             # 클릭 후 처리 대기
-            update_heartbeat("button_clicked_success", user_id, action_name)
+            heartbeat("button_clicked_success")
             time.sleep(3)
 
             # 완료 시 하트비트 업데이트
-            update_heartbeat("process_complete", user_id, action_name)
+            heartbeat("process_complete")
 
             elapsed = time.time() - start_time
             logger.info(f"[{user_id}] [{action_name}] 완료 (소요시간: {elapsed:.2f}s)")
@@ -643,21 +747,33 @@ def process_users(button_ids, action_name):
 
         logger.info(f"=== 사용자 처리 시작: {user_id}, 작업: {action_name} ===")
 
+        # 사전 체크: 이미 오늘 성공한 기록이 있는지 확인
+        has_success_today = db_manager.has_today_success(user_id, action_name)
+        if has_success_today:
+            logger.info(f"[{user_id}] [{action_name}] 오늘자 성공 이력 있음 - 스킵 (attendance_log 생성 안함)")
+            continue
+
+        # 출석 기록 사전 생성 (체크 통과한 경우만)
+        attendance_id = create_attendance_record(user_id, action_name)
+        if not attendance_id:
+            logger.error(f"[{user_id}] [{action_name}] 출석 기록 생성 실패")
+            continue
+
         try:
             delay = random.randint(0, 60)
             logger.info(f"[{user_id}] [{action_name}] 랜덤 딜레이: {delay}s")
             time.sleep(delay)
 
-            login_and_click_button(user_id, password, button_ids, action_name)
+            login_and_click_button(user_id, password, button_ids, action_name, attendance_id)
             logger.info(f"[{user_id}] [{action_name}] 성공")
-            # 성공으로 DB에 기록
-            db_manager.log_attendance(user_id, action_name, "success")
+            # 성공으로 상태 업데이트
+            update_attendance_record(attendance_id, "success")
 
         except Exception as e:
             if "이미 출근 완료" in str(e) or "이미 처리 완료" in str(e) or "이미" in str(e):
                 logger.info(f"[{user_id}] [{action_name}] {e}")
-                # 이미 완료된 상태로 DB에 기록
-                db_manager.log_attendance(user_id, action_name, "already_done", str(e))
+                # 이미 완료된 상태로 업데이트
+                update_attendance_record(attendance_id, "already_done", str(e))
             else:
                 logger.error(f"[{user_id}] [{action_name}] 처리 중 오류: {e}")
 
@@ -675,8 +791,8 @@ def process_users(button_ids, action_name):
                         elif "screenshots/" in line and line.endswith(".html"):
                             html_path = line.split(":")[-1].strip()
 
-                # 실패로 DB에 기록
-                db_manager.log_attendance(user_id, action_name, "failed", error_msg, screenshot_path, html_path)
+                # 실패로 상태 업데이트
+                update_attendance_record(attendance_id, "failed", error_msg)
 
         logger.info(f"=== {user_id} 처리 완료 ===\n")
 

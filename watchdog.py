@@ -182,6 +182,19 @@ def main():
         logger.info("데이터베이스 연결 성공")
         db_manager.log_system("INFO", "watchdog", "워치독 시스템 시작")
 
+    # 워치독 시작 시 초기 출근 체크 수행 (강제 실행)
+    logger.info("🚀 워치독 시작 - 초기 출근 체크 수행 (강제)")
+    try:
+        # 초기 실행 시에는 사전 체크 무시하고 강제로 Main Server 호출
+        logger.info("초기 출근 처리 시도 시작 (강제 실행)")
+        success = execute_punch_in()
+        if success:
+            logger.info("✅ 워치독 초기 출근 체크 완료")
+        else:
+            logger.warning("⚠️ 워치독 초기 출근 체크 실패했지만 계속 진행")
+    except Exception as e:
+        logger.error(f"❌ 워치독 초기 출근 체크 실패: {e}")
+
     # 스케줄러 설정
     scheduler = BlockingScheduler(
         jobstores={'default': MemoryJobStore()},
