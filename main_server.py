@@ -376,6 +376,105 @@ def get_heartbeats(attendance_id):
         logger.error(f"하트비트 조회 오류: {e}")
         return jsonify({'error': '하트비트 조회 중 오류가 발생했습니다'}), 500
 
+@app.route('/api/web/user/status', methods=['GET'])
+@jwt_required()
+def get_user_status():
+    """사용자 활성화 상태 조회"""
+    try:
+        current_user = get_jwt_identity()
+        session = db_manager.get_session()
+        try:
+            result = session.execute(
+                text("SELECT is_active FROM users WHERE user_id = :user_id"),
+                {"user_id": current_user}
+            )
+            user = result.fetchone()
+
+            if not user:
+                return jsonify({'error': '사용자를 찾을 수 없습니다'}), 404
+
+            return jsonify({'success': True, 'is_active': user.is_active})
+
+        finally:
+            session.close()
+
+    except Exception as e:
+        logger.error(f"사용자 상태 조회 오류: {e}")
+        return jsonify({'error': '사용자 상태 조회 중 오류가 발생했습니다'}), 500
+
+@app.route('/api/web/user/status', methods=['PUT'])
+@jwt_required()
+def update_user_status():
+    """사용자 활성화 상태 변경"""
+    try:
+        current_user = get_jwt_identity()
+        data = request.get_json()
+        is_active = data.get('is_active')
+
+        if is_active is None:
+            return jsonify({'error': 'is_active 값이 필요합니다'}), 400
+
+        session = db_manager.get_session()
+        try:
+            result = session.execute(
+                text("UPDATE users SET is_active = :is_active WHERE user_id = :user_id"),
+                {"is_active": is_active, "user_id": current_user}
+            )
+
+            if result.rowcount == 0:
+                return jsonify({'error': '사용자를 찾을 수 없습니다'}), 404
+
+            session.commit()
+            logger.info(f"사용자 {current_user} 활성화 상태 변경: {is_active}")
+            return jsonify({'success': True, 'message': '상태가 변경되었습니다'})
+
+        finally:
+            session.close()
+
+    except Exception as e:
+        logger.error(f"사용자 상태 변경 오류: {e}")
+        return jsonify({'error': '사용자 상태 변경 중 오류가 발생했습니다'}), 500
+
+@app.route('/api/web/user/delete', methods=['DELETE'])
+@jwt_required()
+def delete_user_account():
+    """사용자 계정 완전 삭제"""
+    try:
+        current_user = get_jwt_identity()
+        session = db_manager.get_session()
+        try:
+            # 1. 하트비트 로그 삭제
+            session.execute(
+                text("DELETE FROM heartbeat_status WHERE user_id = :user_id"),
+                {"user_id": current_user}
+            )
+
+            # 2. 출석 로그 삭제
+            session.execute(
+                text("DELETE FROM attendance_logs WHERE user_id = :user_id"),
+                {"user_id": current_user}
+            )
+
+            # 3. 사용자 계정 삭제
+            result = session.execute(
+                text("DELETE FROM users WHERE user_id = :user_id"),
+                {"user_id": current_user}
+            )
+
+            if result.rowcount == 0:
+                return jsonify({'error': '사용자를 찾을 수 없습니다'}), 404
+
+            session.commit()
+            logger.info(f"사용자 {current_user} 계정 완전 삭제 완료")
+            return jsonify({'success': True, 'message': '계정이 완전히 삭제되었습니다'})
+
+        finally:
+            session.close()
+
+    except Exception as e:
+        logger.error(f"계정 삭제 오류: {e}")
+        return jsonify({'error': '계정 삭제 중 오류가 발생했습니다'}), 500
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """헬스체크 엔드포인트"""
