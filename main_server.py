@@ -475,6 +475,264 @@ def delete_user_account():
         logger.error(f"계정 삭제 오류: {e}")
         return jsonify({'error': '계정 삭제 중 오류가 발생했습니다'}), 500
 
+# ==================== 스케줄 관리 API ====================
+
+@app.route('/api/web/schedules', methods=['GET'])
+@jwt_required()
+def get_schedules():
+    """사용자 스케줄 조회 (월별)"""
+    try:
+        current_user = get_jwt_identity()
+        year = request.args.get('year', datetime.now().year, type=int)
+        month = request.args.get('month', datetime.now().month, type=int)
+
+        session = db_manager.get_session()
+        try:
+            # 해당 월의 첫날과 마지막날 계산
+            from calendar import monthrange
+            last_day = monthrange(year, month)[1]
+            start_date = f"{year}-{month:02d}-01"
+            end_date = f"{year}-{month:02d}-{last_day}"
+
+            result = session.execute(
+                text("""
+                    SELECT schedule_date, is_workday, schedule_type,
+                           punch_in_time, punch_out_time, notes
+                    FROM attendance_schedules
+                    WHERE user_id = :user_id
+                    AND schedule_date BETWEEN :start_date AND :end_date
+                    ORDER BY schedule_date
+                """),
+                {
+                    "user_id": current_user,
+                    "start_date": start_date,
+                    "end_date": end_date
+                }
+            )
+
+            schedules = []
+            for row in result.fetchall():
+                schedules.append({
+                    'date': row.schedule_date.strftime('%Y-%m-%d'),
+                    'is_workday': row.is_workday,
+                    'schedule_type': row.schedule_type,
+                    'punch_in_time': row.punch_in_time.strftime('%H:%M') if row.punch_in_time else None,
+                    'punch_out_time': row.punch_out_time.strftime('%H:%M') if row.punch_out_time else None,
+                    'notes': row.notes
+                })
+
+            return jsonify({'success': True, 'schedules': schedules})
+
+        finally:
+            session.close()
+
+    except Exception as e:
+        logger.error(f"스케줄 조회 오류: {e}")
+        return jsonify({'error': '스케줄 조회 중 오류가 발생했습니다'}), 500
+
+@app.route('/api/web/schedules/toggle', methods=['POST'])
+@jwt_required()
+def toggle_schedule():
+    """특정 날짜의 출근 스케줄 토글"""
+    try:
+        current_user = get_jwt_identity()
+        data = request.get_json()
+        schedule_date = data.get('date')
+
+        if not schedule_date:
+            return jsonify({'error': '날짜가 필요합니다'}), 400
+
+        session = db_manager.get_session()
+        try:
+            # 기존 스케줄 확인
+            result = session.execute(
+                text("""
+                    SELECT is_workday FROM attendance_schedules
+                    WHERE user_id = :user_id AND schedule_date = :date
+                """),
+                {"user_id": current_user, "date": schedule_date}
+            )
+
+            existing = result.fetchone()
+
+            if existing:
+                # 기존 스케줄이 있으면 토글
+                new_workday = not existing.is_workday
+                session.execute(
+                    text("""
+                        UPDATE attendance_schedules
+                        SET is_workday = :is_workday, updated_at = CURRENT_TIMESTAMP
+                        WHERE user_id = :user_id AND schedule_date = :date
+                    """),
+                    {
+                        "user_id": current_user,
+                        "date": schedule_date,
+                        "is_workday": new_workday
+                    }
+                )
+            else:
+                # 새 스케줄 생성 (기본적으로 출근일로 설정)
+                from datetime import datetime
+                date_obj = datetime.strptime(schedule_date, '%Y-%m-%d')
+
+                # 주말이면 휴무로, 평일이면 출근으로 기본 설정
+                is_weekend = date_obj.weekday() >= 5
+                new_workday = not is_weekend
+
+                session.execute(
+                    text("""
+                        INSERT INTO attendance_schedules
+                        (user_id, schedule_date, is_workday, schedule_type)
+                        VALUES (:user_id, :date, :is_workday, 'custom')
+                    """),
+                    {
+                        "user_id": current_user,
+                        "date": schedule_date,
+                        "is_workday": new_workday
+                    }
+                )
+
+            session.commit()
+
+            # 업데이트된 스케줄 정보 반환
+            result = session.execute(
+                text("""
+                    SELECT is_workday, schedule_type FROM attendance_schedules
+                    WHERE user_id = :user_id AND schedule_date = :date
+                """),
+                {"user_id": current_user, "date": schedule_date}
+            )
+            updated = result.fetchone()
+
+            return jsonify({
+                'success': True,
+                'date': schedule_date,
+                'is_workday': updated.is_workday,
+                'schedule_type': updated.schedule_type
+            })
+
+        finally:
+            session.close()
+
+    except Exception as e:
+        logger.error(f"스케줄 토글 오류: {e}")
+        return jsonify({'error': '스케줄 토글 중 오류가 발생했습니다'}), 500
+
+@app.route('/api/web/schedules/bulk', methods=['POST'])
+@jwt_required()
+def create_bulk_schedules():
+    """기본 평일 스케줄 대량 생성"""
+    try:
+        current_user = get_jwt_identity()
+        data = request.get_json()
+        year = data.get('year', datetime.now().year)
+        month = data.get('month', datetime.now().month)
+
+        session = db_manager.get_session()
+        try:
+            from calendar import monthrange
+            import datetime as dt
+
+            # 해당 월의 모든 날짜 생성
+            last_day = monthrange(year, month)[1]
+
+            for day in range(1, last_day + 1):
+                date_obj = dt.date(year, month, day)
+
+                # 기존 스케줄이 있는지 확인
+                result = session.execute(
+                    text("""
+                        SELECT id FROM attendance_schedules
+                        WHERE user_id = :user_id AND schedule_date = :date
+                    """),
+                    {"user_id": current_user, "date": date_obj}
+                )
+
+                if result.fetchone():
+                    continue  # 이미 있으면 스킵
+
+                # 평일(월-금)만 출근일로 설정
+                is_workday = date_obj.weekday() < 5  # 0=월요일, 4=금요일
+
+                session.execute(
+                    text("""
+                        INSERT INTO attendance_schedules
+                        (user_id, schedule_date, is_workday, schedule_type, punch_in_time, punch_out_time)
+                        VALUES (:user_id, :date, :is_workday, 'regular', '08:00', '18:00')
+                    """),
+                    {
+                        "user_id": current_user,
+                        "date": date_obj,
+                        "is_workday": is_workday
+                    }
+                )
+
+            session.commit()
+
+            return jsonify({
+                'success': True,
+                'message': f'{year}년 {month}월 기본 스케줄이 생성되었습니다'
+            })
+
+        finally:
+            session.close()
+
+    except Exception as e:
+        logger.error(f"대량 스케줄 생성 오류: {e}")
+        return jsonify({'error': '스케줄 생성 중 오류가 발생했습니다'}), 500
+
+
+@app.route('/api/web/schedules/yearly', methods=['GET'])
+@jwt_required()
+def get_yearly_schedules():
+    """사용자 1년치 스케줄 조회 (성능 최적화용)"""
+    try:
+        current_user = get_jwt_identity()
+        year = request.args.get('year', datetime.now().year, type=int)
+
+        session = db_manager.get_session()
+        try:
+            # 1년치 스케줄 조회
+            start_date = f"{year}-01-01"
+            end_date = f"{year}-12-31"
+
+            result = session.execute(
+                text("""
+                    SELECT schedule_date, is_workday, schedule_type
+                    FROM attendance_schedules
+                    WHERE user_id = :user_id
+                    AND schedule_date BETWEEN :start_date AND :end_date
+                    ORDER BY schedule_date
+                """),
+                {
+                    "user_id": current_user,
+                    "start_date": start_date,
+                    "end_date": end_date
+                }
+            )
+
+            schedules = []
+            for row in result:
+                schedules.append({
+                    'date': row.schedule_date.strftime('%Y-%m-%d'),
+                    'is_workday': row.is_workday,
+                    'schedule_type': row.schedule_type
+                })
+
+            return jsonify({
+                'success': True,
+                'schedules': schedules,
+                'year': year,
+                'count': len(schedules)
+            })
+
+        finally:
+            session.close()
+
+    except Exception as e:
+        logger.error(f"1년치 스케줄 조회 오류: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """헬스체크 엔드포인트"""
