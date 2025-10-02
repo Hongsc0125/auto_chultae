@@ -107,8 +107,15 @@ def punch_in_with_retry():
 
     for user in users:
         user_id = user["user_id"]
-        has_success_today = db_manager.has_today_success(user_id, "punch_in")
 
+        # 1. 스케줄 확인: 오늘이 출근일인지 확인
+        is_workday = db_manager.is_workday_scheduled(user_id)
+        if not is_workday:
+            logger.info(f"[{user_id}] 오늘은 휴무일로 스케줄되어 있음 - 스킵")
+            continue
+
+        # 2. 출근 성공 이력 확인
+        has_success_today = db_manager.has_today_success(user_id, "punch_in")
         if has_success_today:
             logger.info(f"[{user_id}] 오늘자 출근 성공 이력 있음 - 스킵")
         else:
@@ -142,12 +149,21 @@ def punch_out_with_retry():
 
     for user in users:
         user_id = user["user_id"]
-        has_success_today = db_manager.has_today_success(user_id, "punch_out")
 
-        if has_success_today:
+        # 1. 퇴근 성공 이력 확인 (먼저 확인)
+        has_punch_out_success = db_manager.has_today_success(user_id, "punch_out")
+        if has_punch_out_success:
             logger.info(f"[{user_id}] 오늘자 퇴근 성공 이력 있음 - 스킵")
-        else:
-            users_needing_punch_out.append(user_id)
+            continue
+
+        # 2. 출근 이력 확인 (출근이 있어야 퇴근 가능)
+        has_punch_in_success = db_manager.has_today_success(user_id, "punch_in")
+        if not has_punch_in_success:
+            logger.info(f"[{user_id}] 오늘자 출근 이력 없음 - 퇴근 불필요")
+            continue
+
+        # 3. 출근 이력이 있으면 퇴근 대상에 추가 (스케줄 무관)
+        users_needing_punch_out.append(user_id)
 
     if not users_needing_punch_out:
         logger.info("모든 사용자가 오늘 이미 퇴근 완료 - 실행하지 않음")

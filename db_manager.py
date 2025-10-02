@@ -437,6 +437,37 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def is_workday_scheduled(self, user_id, date=None):
+        """특정 날짜에 사용자가 출근일로 스케줄되어 있는지 확인"""
+        if date is None:
+            date = datetime.now().date()
+
+        session = self.get_session()
+        try:
+            result = session.execute(
+                text("""
+                    SELECT is_workday FROM attendance_schedules
+                    WHERE user_id = :user_id AND schedule_date = :date
+                """),
+                {"user_id": user_id, "date": date}
+            )
+
+            row = result.fetchone()
+            if row is None:
+                # 스케줄이 없으면 기본적으로 평일은 출근일로 간주
+                weekday = date.weekday()  # 0=월요일, 6=일요일
+                return weekday < 5  # 월-금요일만 출근일
+
+            return row.is_workday
+
+        except SQLAlchemyError as e:
+            logger.error(f"스케줄 확인 실패: {e}")
+            # 에러 시 기본적으로 평일은 출근일로 간주
+            weekday = date.weekday() if date else datetime.now().weekday()
+            return weekday < 5
+        finally:
+            session.close()
+
 # 전역 데이터베이스 매니저 인스턴스
 db_manager = DatabaseManager()
 
