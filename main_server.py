@@ -68,7 +68,7 @@ def handle_preflight():
 
 # JWT 설정
 app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key-change-this-in-production')
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=8)
 jwt = JWTManager(app)
 
 # 전역 변수
