@@ -332,6 +332,77 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def update_heartbeat(self, component, status, message=None):
+        """서버 하트비트 업데이트 (server_heartbeat 테이블 사용)"""
+        session = self.get_session()
+        try:
+            import os
+            session.execute(
+                text("""
+                    INSERT INTO server_heartbeat
+                    (component, status, pid, stage, timestamp)
+                    VALUES (:component, :status, :pid, :stage, :timestamp)
+                """),
+                {
+                    "component": component,
+                    "status": status,
+                    "pid": os.getpid(),
+                    "stage": message or f"{component}_{status}",
+                    "timestamp": datetime.now()
+                }
+            )
+            session.commit()
+            logger.debug(f"서버 하트비트 업데이트: {component} - {status}")
+            return True
+
+        except SQLAlchemyError as e:
+            session.rollback()
+            logger.error(f"서버 하트비트 업데이트 실패: {e}")
+            return False
+        finally:
+            session.close()
+
+    def log_server_heartbeat(self, component, status, stage=None, user_id=None, action=None):
+        """서버 하트비트 로깅 (워치독용) - UPSERT 방식"""
+        session = self.get_session()
+        try:
+            import os
+            # PostgreSQL UPSERT (ON CONFLICT DO UPDATE)
+            session.execute(
+                text("""
+                    INSERT INTO server_heartbeat
+                    (component, status, pid, stage, user_id, action, timestamp, updated_at)
+                    VALUES (:component, :status, :pid, :stage, :user_id, :action, :timestamp, :updated_at)
+                    ON CONFLICT (component) DO UPDATE SET
+                        status = EXCLUDED.status,
+                        pid = EXCLUDED.pid,
+                        stage = EXCLUDED.stage,
+                        user_id = EXCLUDED.user_id,
+                        action = EXCLUDED.action,
+                        timestamp = EXCLUDED.timestamp,
+                        updated_at = EXCLUDED.updated_at
+                """),
+                {
+                    "component": component,
+                    "status": status,
+                    "pid": os.getpid(),
+                    "stage": stage,
+                    "user_id": user_id,
+                    "action": action,
+                    "timestamp": datetime.now(),
+                    "updated_at": datetime.now()
+                }
+            )
+            session.commit()
+            return True
+
+        except SQLAlchemyError as e:
+            session.rollback()
+            logger.error(f"서버 하트비트 로깅 실패: {e}")
+            return False
+        finally:
+            session.close()
+
 # 전역 데이터베이스 매니저 인스턴스
 db_manager = DatabaseManager()
 

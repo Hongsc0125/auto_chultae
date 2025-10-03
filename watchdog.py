@@ -147,29 +147,47 @@ def monitor_main_server():
     # 프로세스 상태 확인
     process_running = False
     if main_server_process:
-        process_running = main_server_process.poll() is None
+        try:
+            # psutil.Process 객체는 is_running() 메서드 사용
+            if hasattr(main_server_process, 'is_running'):
+                process_running = main_server_process.is_running()
+            else:
+                # subprocess.Popen 객체는 poll() 메서드 사용
+                process_running = main_server_process.poll() is None
+        except (psutil.NoSuchProcess, AttributeError):
+            process_running = False
     else:
         # 기존 프로세스 찾기
         pid = find_main_server_process()
         if pid:
             try:
                 main_server_process = psutil.Process(pid)
-                process_running = True
+                process_running = main_server_process.is_running()
                 logger.info(f"기존 메인 서버 프로세스 발견 - PID: {pid}")
             except psutil.NoSuchProcess:
                 pass
 
-    # 로깅
-    db_manager.log_system("DEBUG", "watchdog",
-        f"메인 서버 상태 - 헬스체크: {is_healthy}, 프로세스: {process_running}",
-        stage="server_monitor")
+    # 로깅 - server_heartbeat 테이블 사용
+    db_manager.log_server_heartbeat(
+        component="watchdog",
+        status="monitoring",
+        stage=f"health:{is_healthy},process:{process_running}"
+    )
 
-    # 서버가 다운된 경우 재시작
-    if not is_healthy or not process_running:
+    # 헬스체크 우선 로직: 헬스체크가 성공하면 재시작하지 않음
+    if is_healthy:
+        # 서버가 정상 응답하면 프로세스 상태와 관계없이 재시작하지 않음
+        logger.debug("메인 서버 헬스체크 성공 - 재시작 불필요")
+        return
+
+    # 헬스체크 실패 시에만 재시작
+    if not is_healthy:
         logger.warning(f"메인 서버 다운 감지 - 헬스체크: {is_healthy}, 프로세스: {process_running}")
-        db_manager.log_system("WARNING", "watchdog",
-            f"메인 서버 다운 감지 - 재시작 시도",
-            stage="server_down")
+        db_manager.log_server_heartbeat(
+            component="watchdog",
+            status="server_down",
+            stage="restart_attempt"
+        )
 
         success = start_main_server()
         if success:
@@ -177,9 +195,11 @@ def monitor_main_server():
             time.sleep(5)
             if check_main_server_health():
                 logger.info("메인 서버 재시작 성공")
-                db_manager.log_system("INFO", "watchdog",
-                    "메인 서버 재시작 성공",
-                    stage="server_restart_success")
+                db_manager.log_server_heartbeat(
+                    component="watchdog",
+                    status="restart_success",
+                    stage="health_check_passed"
+                )
             else:
                 logger.error("메인 서버 재시작 후에도 헬스체크 실패")
                 db_manager.log_system("ERROR", "watchdog",

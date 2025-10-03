@@ -33,22 +33,43 @@ logger = setup_logging()
 
 # 하트비트 함수
 def update_heartbeat(stage="unknown", user_id=None, action=None, attendance_log_id=None):
-    """하트비트 업데이트 (독립 서버 모드에서는 DB만 업데이트)"""
+    """하트비트 업데이트 - heartbeat_status 테이블에 저장"""
     try:
-        # 독립 서버 모드에서는 DB 하트비트만 사용
-        db_manager.legacy_update_heartbeat(
-            stage=stage,
-            user_id=user_id,
-            action_type=action,
-            pid=os.getpid(),
-            attendance_log_id=attendance_log_id
-        )
+        # heartbeat_status 테이블에 저장
+        session = db_manager.get_session()
+        try:
+            from sqlalchemy import text
+            from datetime import datetime
+            import os
 
-        # 상세 로그
-        if user_id and action:
-            logger.info(f"💓 HEARTBEAT: [{user_id}] [{action}] {stage}")
-        else:
-            logger.info(f"💓 HEARTBEAT: {stage}")
+            session.execute(
+                text("""
+                    INSERT INTO heartbeat_status
+                    (stage, user_id, action_type, pid, timestamp, attendance_log_id)
+                    VALUES (:stage, :user_id, :action_type, :pid, :timestamp, :attendance_log_id)
+                """),
+                {
+                    "stage": stage,
+                    "user_id": user_id,
+                    "action_type": action,
+                    "pid": os.getpid(),
+                    "timestamp": datetime.now(),
+                    "attendance_log_id": attendance_log_id
+                }
+            )
+            session.commit()
+
+            # 상세 로그
+            if user_id and action:
+                logger.debug(f"💓 HEARTBEAT: [{user_id}] [{action}] {stage}")
+            else:
+                logger.debug(f"💓 HEARTBEAT: {stage}")
+
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
 
     except Exception as e:
         logger.warning(f"하트비트 업데이트 실패: {e}")
@@ -746,6 +767,12 @@ def process_users(button_ids, action_name):
         password = user_info["password"]
 
         logger.info(f"=== 사용자 처리 시작: {user_id}, 작업: {action_name} ===")
+
+        # 스케줄 체크: 오늘이 출근일인지 확인
+        is_workday = db_manager.is_workday_scheduled(user_id)
+        if not is_workday:
+            logger.info(f"[{user_id}] [{action_name}] 오늘은 휴무일로 스케줄되어 있음 - 스킵")
+            continue
 
         # 사전 체크: 이미 오늘 성공한 기록이 있는지 확인
         has_success_today = db_manager.has_today_success(user_id, action_name)
