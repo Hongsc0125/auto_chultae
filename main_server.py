@@ -86,10 +86,9 @@ def verify_password(password, hashed):
 def update_server_heartbeat():
     """서버 하트비트 업데이트"""
     try:
-        db_manager.update_heartbeat(
+        db_manager.log_server_heartbeat(
             component="main_server",
             status="running",
-            pid=os.getpid(),
             stage="waiting",
             user_id=None,
             action=None
@@ -758,10 +757,9 @@ def handle_command():
 
         if command == 'punch_in':
             logger.info("출근 명령 수신")
-            db_manager.update_heartbeat(
+            db_manager.log_server_heartbeat(
                 component="main_server",
                 status="processing",
-                pid=os.getpid(),
                 stage="punch_in_start",
                 user_id=None,
                 action="punch_in"
@@ -771,10 +769,9 @@ def handle_command():
             from auto_chultae import punch_in
             punch_in()
 
-            db_manager.update_heartbeat(
+            db_manager.log_server_heartbeat(
                 component="main_server",
                 status="completed",
-                pid=os.getpid(),
                 stage="punch_in_complete",
                 user_id=None,
                 action="punch_in"
@@ -785,10 +782,9 @@ def handle_command():
 
         elif command == 'punch_out':
             logger.info("퇴근 명령 수신")
-            db_manager.update_heartbeat(
+            db_manager.log_server_heartbeat(
                 component="main_server",
                 status="processing",
-                pid=os.getpid(),
                 stage="punch_out_start",
                 user_id=None,
                 action="punch_out"
@@ -798,10 +794,9 @@ def handle_command():
             from auto_chultae import punch_out
             punch_out()
 
-            db_manager.update_heartbeat(
+            db_manager.log_server_heartbeat(
                 component="main_server",
                 status="completed",
-                pid=os.getpid(),
                 stage="punch_out_complete",
                 user_id=None,
                 action="punch_out"
@@ -816,10 +811,9 @@ def handle_command():
 
     except Exception as e:
         logger.error(f"명령 처리 오류: {e}")
-        db_manager.update_heartbeat(
+        db_manager.log_server_heartbeat(
             component="main_server",
             status="error",
-            pid=os.getpid(),
             stage="error",
             user_id=None,
             action=None
@@ -833,10 +827,9 @@ def signal_handler(signum, frame):
 
     # 데이터베이스에 종료 상태 기록
     try:
-        db_manager.update_heartbeat(
+        db_manager.log_server_heartbeat(
             component="main_server",
             status="shutting_down",
-            pid=os.getpid(),
             stage="shutdown",
             user_id=None,
             action=None
