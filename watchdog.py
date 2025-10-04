@@ -86,15 +86,38 @@ def check_main_server_health():
         return False
 
 def find_main_server_process():
-    """메인 서버 프로세스 찾기"""
+    """메인 서버 프로세스 찾기 (main_server.py 직접 실행 또는 Gunicorn으로 실행)"""
     try:
+        found_processes = []
         for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
             try:
                 cmdline = proc.info['cmdline']
-                if cmdline and 'main_server.py' in ' '.join(cmdline):
-                    return proc.pid
+                if not cmdline:
+                    continue
+
+                cmdline_str = ' '.join(cmdline)
+
+                # 1. main_server.py 직접 실행 감지
+                if 'main_server.py' in cmdline_str:
+                    found_processes.append(proc.pid)
+                    logger.debug(f"메인 서버 프로세스 발견 (직접실행): PID {proc.pid} - {cmdline_str}")
+
+                # 2. Gunicorn으로 main_server 실행 감지
+                elif 'gunicorn' in cmdline_str and 'main_server' in cmdline_str:
+                    # master 프로세스가 아닌 worker 프로세스 선택
+                    if '--worker-class' not in cmdline_str and 'main_server:app' in cmdline_str:
+                        found_processes.append(proc.pid)
+                        logger.debug(f"메인 서버 프로세스 발견 (Gunicorn): PID {proc.pid} - {cmdline_str}")
+
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
+
+        if found_processes:
+            # 여러 프로세스가 있으면 첫 번째 것 반환
+            selected_pid = found_processes[0]
+            logger.info(f"메인 서버 프로세스 선택: PID {selected_pid} (총 {len(found_processes)}개 발견)")
+            return selected_pid
+
         return None
     except Exception as e:
         logger.error(f"메인 서버 프로세스 찾기 실패: {e}")
