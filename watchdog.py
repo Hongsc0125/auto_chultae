@@ -474,6 +474,102 @@ def punch_out_with_retry():
                 f"퇴근 처리 실패 (18:55 이후) - 대상 사용자: {users_needing_punch_out}",
                 stage="execution_failure", action_type="punch_out")
 
+def check_missed_schedules():
+    """재시작 시 놓친 스케줄 확인 및 처리"""
+    now = datetime.now()
+    current_time = now.time()
+    current_weekday = now.weekday()  # 0=월요일, 6=일요일
+
+    # 평일이 아니면 체크하지 않음
+    if current_weekday >= 5:  # 토요일(5), 일요일(6)
+        logger.info("주말이므로 놓친 스케줄 체크 생략")
+        return
+
+    logger.info(f"놓친 스케줄 체크 시작 - 현재시간: {current_time}")
+    db_manager.log_system("INFO", "watchdog",
+        f"놓친 스케줄 체크 시작 - 현재시간: {current_time}",
+        stage="missed_schedule_check")
+
+    # 1. 출근 시간대 놓쳤는지 체크 (8:40 이후)
+    if current_time > dt_time(8, 40):
+        logger.info("출근 시간대(08:00-08:40) 경과 - 놓친 출근 확인")
+        db_manager.log_system("INFO", "watchdog",
+            "출근 시간대 경과 - 놓친 출근 확인 및 처리",
+            stage="missed_punch_in_check")
+
+        # 출근 이력이 없는 사용자들에게 출근 처리
+        users = get_users()
+        users_needing_punch_in = []
+
+        for user in users:
+            user_id = user["user_id"]
+            is_workday = db_manager.is_workday_scheduled(user_id)
+            has_success_today = db_manager.has_today_success(user_id, "punch_in")
+
+            if is_workday and not has_success_today:
+                users_needing_punch_in.append(user_id)
+                db_manager.log_system("INFO", "watchdog",
+                    f"[{user_id}] 놓친 출근 처리 대상에 추가",
+                    stage="missed_punch_in_target", user_id=user_id, action_type="punch_in")
+
+        if users_needing_punch_in:
+            logger.info(f"놓친 출근 처리 시도 - 대상 사용자: {users_needing_punch_in}")
+            db_manager.log_system("WARNING", "watchdog",
+                f"놓친 출근 처리 시도 - 대상 사용자: {users_needing_punch_in}",
+                stage="missed_punch_in_execute", action_type="punch_in")
+
+            success = execute_punch_in()
+            if success:
+                logger.info("✅ 놓친 출근 처리 성공")
+                db_manager.log_system("INFO", "watchdog",
+                    "놓친 출근 처리 성공",
+                    stage="missed_punch_in_success", action_type="punch_in")
+            else:
+                logger.warning("⚠️ 놓친 출근 처리 실패")
+                db_manager.log_system("WARNING", "watchdog",
+                    "놓친 출근 처리 실패",
+                    stage="missed_punch_in_failure", action_type="punch_in")
+
+    # 2. 퇴근 시간대 놓쳤는지 체크 (19:00 이후)
+    if current_time > dt_time(19, 0):
+        logger.info("퇴근 시간대(18:00-19:00) 경과 - 놓친 퇴근 확인")
+        db_manager.log_system("INFO", "watchdog",
+            "퇴근 시간대 경과 - 놓친 퇴근 확인 및 처리",
+            stage="missed_punch_out_check")
+
+        # 출근은 했지만 퇴근 이력이 없는 사용자들에게 퇴근 처리
+        users = get_users()
+        users_needing_punch_out = []
+
+        for user in users:
+            user_id = user["user_id"]
+            has_punch_in_success = db_manager.has_today_success(user_id, "punch_in")
+            has_punch_out_success = db_manager.has_today_success(user_id, "punch_out")
+
+            if has_punch_in_success and not has_punch_out_success:
+                users_needing_punch_out.append(user_id)
+                db_manager.log_system("INFO", "watchdog",
+                    f"[{user_id}] 놓친 퇴근 처리 대상에 추가",
+                    stage="missed_punch_out_target", user_id=user_id, action_type="punch_out")
+
+        if users_needing_punch_out:
+            logger.info(f"놓친 퇴근 처리 시도 - 대상 사용자: {users_needing_punch_out}")
+            db_manager.log_system("WARNING", "watchdog",
+                f"놓친 퇴근 처리 시도 - 대상 사용자: {users_needing_punch_out}",
+                stage="missed_punch_out_execute", action_type="punch_out")
+
+            success = execute_punch_out()
+            if success:
+                logger.info("✅ 놓친 퇴근 처리 성공")
+                db_manager.log_system("INFO", "watchdog",
+                    "놓친 퇴근 처리 성공",
+                    stage="missed_punch_out_success", action_type="punch_out")
+            else:
+                logger.warning("⚠️ 놓친 퇴근 처리 실패")
+                db_manager.log_system("WARNING", "watchdog",
+                    "놓친 퇴근 처리 실패",
+                    stage="missed_punch_out_failure", action_type="punch_out")
+
 def main():
     """워치독 메인 함수 - 스케줄링만 담당"""
     import signal
@@ -494,6 +590,20 @@ def main():
     else:
         logger.info("데이터베이스 연결 성공")
         db_manager.log_system("INFO", "watchdog", "워치독 시스템 시작")
+
+    # 워치독 시작 시 놓친 스케줄 확인
+    logger.info("🕐 워치독 시작 - 놓친 스케줄 확인")
+    db_manager.log_system("INFO", "watchdog",
+        "워치독 시작 - 놓친 스케줄 확인 수행",
+        stage="startup_missed_check")
+
+    try:
+        check_missed_schedules()
+    except Exception as e:
+        logger.error(f"❌ 놓친 스케줄 확인 실패: {e}")
+        db_manager.log_system("ERROR", "watchdog",
+            f"놓친 스케줄 확인 예외 발생: {e}",
+            stage="startup_missed_check_error")
 
     # 워치독 시작 시 초기 출근 체크 수행 (강제 실행)
     logger.info("🚀 워치독 시작 - 초기 출근 체크 수행 (강제)")
@@ -548,13 +658,13 @@ def main():
     # 19:00에도 한 번 더
     scheduler.add_job(punch_out_with_retry, 'cron', hour=19, minute=0, day_of_week='mon-fri')
 
-    # 메인 서버 모니터링: 30초마다 체크
-    scheduler.add_job(monitor_main_server, 'interval', seconds=30)
+    # 메인 서버 모니터링: 60초마다 체크
+    scheduler.add_job(monitor_main_server, 'interval', seconds=60)
 
     logger.info("스케줄러 시작")
     logger.info("출근 스케줄: 월-금 08:00-08:40 (5분간격)")
     logger.info("퇴근 스케줄: 월-금 18:00-19:00 (5분간격)")
-    logger.info("메인 서버 모니터링: 30초마다")
+    logger.info("메인 서버 모니터링: 60초마다")
 
     try:
         scheduler.start()
