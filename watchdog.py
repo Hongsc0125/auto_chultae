@@ -160,11 +160,211 @@ def start_main_server():
             stage="server_start_error")
         return False
 
+def check_stuck_process():
+    """모든 프로세스 단계에서 멈춤 상황 감지"""
+    try:
+        from datetime import datetime, timedelta
+
+        # 최근 10분 내 server_heartbeat에서 main_server 관련 로그 확인
+        with db_manager.safe_session() as session:
+            ten_minutes_ago = datetime.now() - timedelta(minutes=10)
+
+            result = session.execute(
+                text("""
+                    SELECT stage, timestamp, action, status
+                    FROM server_heartbeat
+                    WHERE component = 'main_server'
+                    AND timestamp > :threshold
+                    ORDER BY timestamp DESC
+                    LIMIT 50
+                """),
+                {"threshold": ten_minutes_ago}
+            )
+
+            recent_logs = result.fetchall()
+
+            if not recent_logs:
+                logger.debug("최근 10분간 메인 서버 로그 없음")
+                return False
+
+            # 멈춤을 의심할 수 있는 단계들 정의
+            stuck_indicators = [
+                'page_creation_start',
+                'page_creation_attempt',
+                'playwright_init',
+                'browser_started',
+                'context_created',
+                'login_attempt',
+                'button_search',
+                'popup_handling',
+                'processing'
+            ]
+
+            # 완료를 나타내는 단계들
+            completion_indicators = [
+                'success',
+                'complete',
+                'finished',
+                'process_start',  # 새로운 프로세스 시작
+                'execution_result',
+                'punch_in_success',
+                'punch_out_success',
+                'error',  # 에러도 완료로 간주 (다음 단계로 진행됨)
+                'failure'
+            ]
+
+            now = datetime.now()
+
+            # 각 stuck_indicator에 대해 멈춤 상황 확인
+            for indicator in stuck_indicators:
+                stuck_start_time = None
+                has_completion_after = False
+
+                for log in recent_logs:
+                    stage, timestamp, action, status = log
+
+                    # 해당 indicator로 시작된 로그 찾기
+                    if indicator in stage and stuck_start_time is None:
+                        stuck_start_time = timestamp
+
+                        # 3분 이상 된 경우만 체크
+                        if now - timestamp > timedelta(minutes=3):
+                            # 그 이후에 완료 indicator가 있는지 확인
+                            for other_log in recent_logs:
+                                other_stage, other_timestamp, _, _ = other_log
+
+                                if other_timestamp > timestamp:
+                                    # 완료 indicator가 있거나, 새로운 프로세스가 시작된 경우
+                                    for completion in completion_indicators:
+                                        if completion in other_stage.lower():
+                                            has_completion_after = True
+                                            break
+
+                                    if has_completion_after:
+                                        break
+
+                            # 완료 indicator가 없으면 멈춤으로 판단
+                            if not has_completion_after:
+                                elapsed = now - timestamp
+                                logger.warning(f"프로세스 멈춤 감지: {indicator} - 시작: {timestamp}, 경과: {elapsed}")
+                                db_manager.log_system("WARNING", "watchdog",
+                                    f"프로세스 멈춤 감지: {indicator}, 경과시간: {elapsed}",
+                                    stage="stuck_detection")
+                                return True
+
+            # 추가 체크: 최근 5분간 아무런 활동이 없는 경우
+            five_minutes_ago = now - timedelta(minutes=5)
+            recent_activity = [log for log in recent_logs if log[1] > five_minutes_ago]
+
+            if not recent_activity:
+                logger.warning("최근 5분간 메인 서버 활동 없음 - 멈춤 의심")
+                db_manager.log_system("WARNING", "watchdog",
+                    "최근 5분간 메인 서버 활동 없음",
+                    stage="no_activity_detected")
+                return True
+
+            return False
+
+    except Exception as e:
+        logger.error(f"프로세스 멈춤 감지 실패: {e}")
+        return False
+
+def force_restart_main_server():
+    """메인 서버 강제 재시작 (프로세스 kill 후 재시작)"""
+    global main_server_process, restart_count
+
+    try:
+        logger.warning("메인 서버 강제 재시작 시작")
+        db_manager.log_server_heartbeat(
+            component="watchdog",
+            status="force_restart",
+            stage="kill_attempt"
+        )
+
+        # 1. 기존 프로세스들 모두 찾아서 종료
+        killed_pids = []
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                cmdline = proc.info['cmdline']
+                if not cmdline:
+                    continue
+
+                cmdline_str = ' '.join(cmdline)
+
+                # main_server 관련 프로세스 모두 종료
+                if ('main_server.py' in cmdline_str or
+                    ('gunicorn' in cmdline_str and 'main_server' in cmdline_str)):
+
+                    proc_obj = psutil.Process(proc.info['pid'])
+                    proc_obj.terminate()
+                    killed_pids.append(proc.info['pid'])
+                    logger.info(f"메인 서버 프로세스 종료 - PID: {proc.info['pid']}")
+
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+        # 2. 종료 대기
+        time.sleep(3)
+
+        # 3. 강제 종료가 필요한 프로세스 확인
+        for pid in killed_pids:
+            try:
+                proc = psutil.Process(pid)
+                if proc.is_running():
+                    proc.kill()
+                    logger.warning(f"메인 서버 프로세스 강제 종료 - PID: {pid}")
+            except psutil.NoSuchProcess:
+                pass
+
+        # 4. 기존 변수 초기화
+        main_server_process = None
+
+        # 5. 새로 시작
+        time.sleep(2)
+        success = start_main_server()
+
+        if success:
+            logger.info("메인 서버 강제 재시작 성공")
+            db_manager.log_server_heartbeat(
+                component="watchdog",
+                status="force_restart_success",
+                stage="restart_complete"
+            )
+            return True
+        else:
+            logger.error("메인 서버 강제 재시작 실패")
+            db_manager.log_server_heartbeat(
+                component="watchdog",
+                status="force_restart_failed",
+                stage="restart_failed"
+            )
+            return False
+
+    except Exception as e:
+        logger.error(f"메인 서버 강제 재시작 중 오류: {e}")
+        db_manager.log_system("ERROR", "watchdog",
+            f"메인 서버 강제 재시작 중 오류: {e}",
+            stage="force_restart_error")
+        return False
+
 def monitor_main_server():
     """메인 서버 모니터링 및 재시작"""
     global main_server_process
 
-    # 헬스체크 수행
+    # 1. 프로세스 멈춤 상황 먼저 확인
+    if check_stuck_process():
+        logger.warning("프로세스 멈춤 감지 - 메인 서버 강제 재시작 수행")
+        db_manager.log_system("WARNING", "watchdog",
+            "프로세스 멈춤 감지로 인한 강제 재시작",
+            stage="stuck_detection")
+
+        if force_restart_main_server():
+            # 강제 재시작 성공 후 잠시 대기하고 리턴
+            time.sleep(10)
+            return
+        # 강제 재시작 실패 시 일반 로직 계속 진행
+
+    # 2. 일반 헬스체크 수행
     is_healthy = check_main_server_health()
 
     # 프로세스 상태 확인
