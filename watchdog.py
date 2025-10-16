@@ -15,6 +15,7 @@ from datetime import datetime, time as dt_time
 from dotenv import load_dotenv
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.jobstores.memory import MemoryJobStore
+from sqlalchemy import text
 from db_manager import db_manager
 
 # .env 파일 로드
@@ -128,11 +129,25 @@ def start_main_server():
     global main_server_process, restart_count
     try:
         # 기존 프로세스가 있으면 종료
-        if main_server_process and main_server_process.poll() is None:
-            main_server_process.terminate()
-            time.sleep(2)
-            if main_server_process.poll() is None:
-                main_server_process.kill()
+        if main_server_process:
+            try:
+                # psutil.Process 객체인지 확인
+                if hasattr(main_server_process, 'is_running'):
+                    if main_server_process.is_running():
+                        main_server_process.terminate()
+                        time.sleep(2)
+                        if main_server_process.is_running():
+                            main_server_process.kill()
+                # subprocess.Popen 객체인지 확인
+                elif hasattr(main_server_process, 'poll'):
+                    if main_server_process.poll() is None:
+                        main_server_process.terminate()
+                        time.sleep(2)
+                        if main_server_process.poll() is None:
+                            main_server_process.kill()
+            except (psutil.NoSuchProcess, AttributeError, OSError):
+                # 프로세스가 이미 없거나 접근할 수 없는 경우 무시
+                pass
 
         # 새로 시작
         cmd = [sys.executable, "main_server.py"]
@@ -377,18 +392,21 @@ def monitor_main_server():
             else:
                 # subprocess.Popen 객체는 poll() 메서드 사용
                 process_running = main_server_process.poll() is None
-        except (psutil.NoSuchProcess, AttributeError):
+        except (psutil.NoSuchProcess, AttributeError, OSError):
             process_running = False
-    else:
-        # 기존 프로세스 찾기
+            main_server_process = None  # 유효하지 않은 프로세스 객체 제거
+
+    # main_server_process가 없거나 유효하지 않으면 기존 프로세스 찾기
+    if not main_server_process:
         pid = find_main_server_process()
         if pid:
             try:
-                main_server_process = psutil.Process(pid)
-                process_running = main_server_process.is_running()
+                # 찾은 프로세스는 참조용으로만 사용하고 main_server_process에 할당하지 않음
+                found_process = psutil.Process(pid)
+                process_running = found_process.is_running()
                 logger.info(f"기존 메인 서버 프로세스 발견 - PID: {pid}")
             except psutil.NoSuchProcess:
-                pass
+                process_running = False
 
     # 로깅 - server_heartbeat 테이블 사용
     db_manager.log_server_heartbeat(
