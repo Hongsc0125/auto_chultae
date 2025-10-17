@@ -5,6 +5,57 @@ cd "$(dirname "$0")"
 echo "출근 관리 시스템 종료!! (독립 서버 모드)"
 echo ""
 
+# 환경변수에서 포트 정보 가져오기
+source .env 2>/dev/null || true
+MAIN_SERVER_URL=${MAIN_SERVER_URL:-"http://127.0.0.1:9000"}
+MAIN_PORT=$(echo $MAIN_SERVER_URL | sed -n 's/.*:\([0-9]*\).*/\1/p')
+MAIN_PORT=${MAIN_PORT:-9000}
+
+# 포트 정리 함수
+cleanup_port() {
+    local port=$1
+    local port_pids=$(ss -tlnp 2>/dev/null | grep ":$port " | grep -o 'pid=[0-9]*' | cut -d= -f2)
+
+    if [ ! -z "$port_pids" ]; then
+        echo "🧹 포트 $port 정리 중..."
+        for pid in $port_pids; do
+            if ps -p $pid > /dev/null 2>&1; then
+                echo "   포트 $port 점유 프로세스 종료 중... (PID: $pid)"
+                kill $pid 2>/dev/null
+                sleep 2
+                if ps -p $pid > /dev/null 2>&1; then
+                    echo "   강제 종료 중... (PID: $pid)"
+                    kill -9 $pid 2>/dev/null
+                fi
+            fi
+        done
+    fi
+}
+
+# 완전한 프로세스 정리 함수
+complete_cleanup() {
+    echo "🔍 완전한 시스템 정리 중..."
+
+    # 모든 관련 프로세스 찾기 및 종료
+    local all_pids=$(pgrep -f "main_server\|gunicorn.*main_server\|python.*watchdog\.py\|auto_chultae" 2>/dev/null)
+
+    if [ ! -z "$all_pids" ]; then
+        echo "   관련 프로세스 발견: $all_pids"
+        kill $all_pids 2>/dev/null
+        sleep 3
+
+        # 여전히 살아있는 프로세스 강제 종료
+        local remaining_pids=$(pgrep -f "main_server\|gunicorn.*main_server\|python.*watchdog\.py\|auto_chultae" 2>/dev/null)
+        if [ ! -z "$remaining_pids" ]; then
+            echo "   남은 프로세스 강제 종료: $remaining_pids"
+            kill -9 $remaining_pids 2>/dev/null
+        fi
+    fi
+
+    # 포트 정리
+    cleanup_port $MAIN_PORT
+}
+
 # 워치독 서버 종료
 echo "🕐 워치독 서버 종료 중..."
 if [ -f "watchdog.pid" ]; then
@@ -86,10 +137,30 @@ else
     fi
 fi
 
+# 완전한 정리 수행
+complete_cleanup
+
 # 기타 관련 파일 정리
-rm -f auto_chultae.pid 2>/dev/null
-rm -f heartbeat.txt 2>/dev/null
+rm -f main_server.pid watchdog.pid auto_chultae.pid heartbeat.txt 2>/dev/null
+
+# 최종 검증
+echo "🔍 최종 정리 검증 중..."
+remaining_processes=$(pgrep -f "main_server\|gunicorn.*main_server\|python.*watchdog\.py" 2>/dev/null)
+port_check=$(ss -tlnp 2>/dev/null | grep ":$MAIN_PORT ")
+
+if [ ! -z "$remaining_processes" ]; then
+    echo "⚠️  아직 남은 프로세스: $remaining_processes"
+    kill -9 $remaining_processes 2>/dev/null
+fi
+
+if [ ! -z "$port_check" ]; then
+    echo "⚠️  포트 $MAIN_PORT 아직 점유 중"
+    cleanup_port $MAIN_PORT
+else
+    echo "✅ 포트 $MAIN_PORT 정리 완료"
+fi
 
 echo ""
 echo "✅ 출근 관리 시스템 종료 완료"
+echo "   🧹 모든 프로세스 및 포트 정리됨"
 echo ""
