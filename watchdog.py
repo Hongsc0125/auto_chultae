@@ -47,6 +47,8 @@ logger = setup_logging()
 # 전역 변수
 main_server_process = None
 restart_count = 0
+last_command_start_time = None
+current_command = None
 
 # 사용자 목록 조회
 def get_users():
@@ -284,6 +286,62 @@ def check_stuck_process():
         logger.error(f"프로세스 멈춤 감지 실패: {e}")
         return False
 
+def check_crawling_progress():
+    """크롤링 진행 상태 확인 - 5분 이상 진행되지 않으면 True 반환"""
+    global last_command_start_time, current_command
+
+    try:
+        from datetime import datetime, timedelta
+
+        # 현재 실행 중인 명령이 없으면 체크하지 않음
+        if not current_command or not last_command_start_time:
+            return False
+
+        now = datetime.now()
+        elapsed = now - last_command_start_time
+
+        # 5분 이상 경과했는지 확인
+        if elapsed > timedelta(minutes=5):
+            logger.warning(f"크롤링 진행 없음 감지: {current_command}, 경과시간: {elapsed}")
+            db_manager.log_system("WARNING", "watchdog",
+                f"크롤링 진행 없음 감지: {current_command}, 경과시간: {elapsed}",
+                stage="crawling_stuck_detection", action_type=current_command)
+
+            # 데이터베이스에서 최근 진행 상황 확인
+            with db_manager.safe_session() as session:
+                five_minutes_ago = now - timedelta(minutes=5)
+
+                # 최근 5분간 크롤링 진행 로그 확인
+                result = session.execute(
+                    text("""
+                        SELECT stage, timestamp, action
+                        FROM server_heartbeat
+                        WHERE component = 'main_server'
+                        AND timestamp > :threshold
+                        AND (stage LIKE '%success%' OR stage LIKE '%complete%' OR stage LIKE '%finished%')
+                        ORDER BY timestamp DESC
+                        LIMIT 1
+                    """),
+                    {"threshold": five_minutes_ago}
+                )
+
+                recent_progress = result.fetchone()
+
+                if not recent_progress:
+                    logger.warning(f"최근 5분간 크롤링 진행 없음 - 강제 재시작 필요")
+                    db_manager.log_system("WARNING", "watchdog",
+                        "최근 5분간 크롤링 진행 없음 - 강제 재시작 필요",
+                        stage="no_crawling_progress", action_type=current_command)
+                    return True
+                else:
+                    logger.info(f"최근 크롤링 진행 확인됨: {recent_progress[0]} at {recent_progress[1]}")
+
+        return False
+
+    except Exception as e:
+        logger.error(f"크롤링 진행 상태 확인 중 오류: {e}")
+        return False
+
 def force_restart_main_server():
     """메인 서버 강제 재시작 (프로세스 kill 후 재시작)"""
     global main_server_process, restart_count
@@ -366,7 +424,20 @@ def monitor_main_server():
     """메인 서버 모니터링 및 재시작"""
     global main_server_process
 
-    # 1. 프로세스 멈춤 상황 먼저 확인
+    # 1. 크롤링 진행 상태 먼저 확인
+    if check_crawling_progress():
+        logger.warning("크롤링 진행 없음 감지 - 메인 서버 강제 재시작 수행")
+        db_manager.log_system("WARNING", "watchdog",
+            "크롤링 진행 없음 감지로 인한 강제 재시작",
+            stage="crawling_stuck_restart")
+
+        if force_restart_main_server():
+            # 강제 재시작 성공 후 잠시 대기하고 리턴
+            time.sleep(10)
+            return
+        # 강제 재시작 실패 시 일반 로직 계속 진행
+
+    # 2. 프로세스 멈춤 상황 확인
     if check_stuck_process():
         logger.warning("프로세스 멈춤 감지 - 메인 서버 강제 재시작 수행")
         db_manager.log_system("WARNING", "watchdog",
@@ -450,12 +521,19 @@ def monitor_main_server():
 # 메인 서버 통신 함수들
 def send_command_to_main_server(command):
     """메인 서버에 명령 전송"""
+    global last_command_start_time, current_command
+
     try:
         import requests
+        from datetime import datetime
 
         main_server_url = os.getenv('MAIN_SERVER_URL')
         if not main_server_url:
             raise ValueError("MAIN_SERVER_URL 환경변수가 필수입니다.")
+
+        # 명령 시작 시간 기록
+        last_command_start_time = datetime.now()
+        current_command = command
 
         # 상세 로깅: 메인 서버 통신 시작
         db_manager.log_system("INFO", "watchdog",
@@ -476,25 +554,102 @@ def send_command_to_main_server(command):
             db_manager.log_system("INFO", "watchdog",
                 f"{command} 명령 전송 성공 - 상태코드: {response.status_code}",
                 stage="command_success", action_type=command)
+
+            # 성공 시 명령 완료 기록
+            current_command = None
+            last_command_start_time = None
             return True
         else:
             logger.error(f"{command} 명령 전송 실패: {response.status_code}")
             db_manager.log_system("ERROR", "watchdog",
                 f"{command} 명령 전송 실패 - 상태코드: {response.status_code}",
                 stage="command_failure", action_type=command)
-            return False
+
+            # HTTP 오류 시 메인 서버 재시작 시도
+            logger.warning(f"HTTP 오류로 인한 메인 서버 재시작 시도")
+            if force_restart_main_server():
+                logger.info("메인 서버 재시작 성공 - 명령 재시도")
+                # 재시작 후 잠시 대기하고 명령 재시도
+                time.sleep(5)
+                try:
+                    response = requests.post(f"{main_server_url}/api/command",
+                                           json={"command": command},
+                                           timeout=300)
+                    if response.status_code == 200:
+                        logger.info(f"{command} 명령 재시도 성공")
+                        # 성공 시 명령 완료 기록
+                        current_command = None
+                        last_command_start_time = None
+                        return True
+                    else:
+                        logger.error(f"{command} 명령 재시도 실패: {response.status_code}")
+                        # 실패 시 명령 완료 기록
+                        current_command = None
+                        last_command_start_time = None
+                        return False
+                except Exception as retry_e:
+                    logger.error(f"{command} 명령 재시도 중 오류: {retry_e}")
+                    # 실패 시 명령 완료 기록
+                    current_command = None
+                    last_command_start_time = None
+                    return False
+            else:
+                logger.error("메인 서버 재시작 실패")
+                # 실패 시 명령 완료 기록
+                current_command = None
+                last_command_start_time = None
+                return False
 
     except requests.exceptions.RequestException as e:
         logger.error(f"{command} 명령 전송 오류 (메인 서버 연결 실패): {e}")
         db_manager.log_system("ERROR", "watchdog",
             f"{command} 명령 전송 네트워크 오류 (메인 서버 연결 실패): {e}",
             stage="network_error", action_type=command)
-        return False
+
+        # 네트워크 오류 시 메인 서버 재시작 시도
+        logger.warning(f"네트워크 오류로 인한 메인 서버 재시작 시도")
+        if force_restart_main_server():
+            logger.info("메인 서버 재시작 성공 - 명령 재시도")
+            # 재시작 후 잠시 대기하고 명령 재시도
+            time.sleep(5)
+            try:
+                main_server_url = os.getenv('MAIN_SERVER_URL')
+                response = requests.post(f"{main_server_url}/api/command",
+                                       json={"command": command},
+                                       timeout=300)
+                if response.status_code == 200:
+                    logger.info(f"{command} 명령 재시도 성공")
+                    # 성공 시 명령 완료 기록
+                    current_command = None
+                    last_command_start_time = None
+                    return True
+                else:
+                    logger.error(f"{command} 명령 재시도 실패: {response.status_code}")
+                    # 실패 시 명령 완료 기록
+                    current_command = None
+                    last_command_start_time = None
+                    return False
+            except Exception as retry_e:
+                logger.error(f"{command} 명령 재시도 중 오류: {retry_e}")
+                # 실패 시 명령 완료 기록
+                current_command = None
+                last_command_start_time = None
+                return False
+        else:
+            logger.error("메인 서버 재시작 실패")
+            # 실패 시 명령 완료 기록
+            current_command = None
+            last_command_start_time = None
+            return False
+
     except Exception as e:
         logger.error(f"{command} 명령 전송 오류: {e}")
         db_manager.log_system("ERROR", "watchdog",
             f"{command} 명령 전송 예외 오류: {e}",
             stage="exception_error", action_type=command)
+        # 실패 시 명령 완료 기록
+        current_command = None
+        last_command_start_time = None
         return False
 
 def execute_punch_in():
