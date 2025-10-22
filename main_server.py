@@ -765,9 +765,26 @@ def handle_command():
                 action="punch_in"
             )
 
-            # auto_chultae 모듈에서 punch_in 실행
-            from auto_chultae import punch_in
-            punch_in()
+            # auto_chultae 모듈을 타임아웃과 함께 실행
+            import subprocess
+
+            try:
+                # 300초(5분) 타임아웃으로 punch_in 실행
+                result = subprocess.run([
+                    "python", "-c", "from auto_chultae import punch_in; punch_in()"
+                ], timeout=300, capture_output=True, text=True)
+
+                if result.returncode == 0:
+                    logger.info("출근 처리 서브프로세스 완료")
+                else:
+                    logger.error(f"출근 처리 서브프로세스 실패: {result.stderr}")
+
+            except subprocess.TimeoutExpired:
+                logger.error("출근 처리 타임아웃 (300초) - 프로세스 종료")
+                raise Exception("출근 처리 타임아웃")
+            except Exception as e:
+                logger.error(f"출근 처리 서브프로세스 오류: {e}")
+                raise e
 
             db_manager.log_server_heartbeat(
                 component="main_server",
@@ -790,9 +807,26 @@ def handle_command():
                 action="punch_out"
             )
 
-            # auto_chultae 모듈에서 punch_out 실행
-            from auto_chultae import punch_out
-            punch_out()
+            # auto_chultae 모듈을 타임아웃과 함께 실행
+            import subprocess
+
+            try:
+                # 300초(5분) 타임아웃으로 punch_out 실행
+                result = subprocess.run([
+                    "python", "-c", "from auto_chultae import punch_out; punch_out()"
+                ], timeout=300, capture_output=True, text=True)
+
+                if result.returncode == 0:
+                    logger.info("퇴근 처리 서브프로세스 완료")
+                else:
+                    logger.error(f"퇴근 처리 서브프로세스 실패: {result.stderr}")
+
+            except subprocess.TimeoutExpired:
+                logger.error("퇴근 처리 타임아웃 (300초) - 프로세스 종료")
+                raise Exception("퇴근 처리 타임아웃")
+            except Exception as e:
+                logger.error(f"퇴근 처리 서브프로세스 오류: {e}")
+                raise e
 
             db_manager.log_server_heartbeat(
                 component="main_server",
@@ -887,9 +921,20 @@ def main():
         """서버 시작 시 초기 출근 체크"""
         try:
             logger.info("🚀 서버 시작 - 초기 출근 체크 수행")
-            from auto_chultae import punch_in
-            punch_in()
-            logger.info("✅ 초기 출근 체크 완료")
+
+            # 타임아웃과 함께 실행
+            import subprocess
+            result = subprocess.run([
+                "python", "-c", "from auto_chultae import punch_in; punch_in()"
+            ], timeout=300, capture_output=True, text=True)
+
+            if result.returncode == 0:
+                logger.info("✅ 초기 출근 체크 완료")
+            else:
+                logger.error(f"초기 출근 체크 서브프로세스 실패: {result.stderr}")
+
+        except subprocess.TimeoutExpired:
+            logger.error("초기 출근 체크 타임아웃 (300초)")
         except Exception as e:
             logger.error(f"❌ 초기 출근 체크 실패: {e}")
 
