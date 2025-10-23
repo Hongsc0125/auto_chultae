@@ -340,12 +340,6 @@ def main():
         f"현재 시간 확인 - {now.strftime('%Y-%m-%d %H:%M:%S')} (요일: {weekday})",
         stage="time_check")
 
-    # 주말 체크 (토요일=5, 일요일=6)
-    if weekday >= 5:
-        logger.info("주말이므로 실행하지 않음")
-        db_manager.log_system("INFO", "watchdog", "주말이므로 실행하지 않음", stage="weekend_skip")
-        sys.exit(0)
-
     # 출근 시간: 08:00 ~ 08:40
     if current_hour == 8 and current_minute <= 40:
         logger.info("출근 시간대 감지 - 출근 처리 시작")
