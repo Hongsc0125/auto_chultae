@@ -929,9 +929,12 @@ def main():
                 app.run(host=host, port=port, debug=False, use_reloader=False)
     except KeyboardInterrupt:
         logger.info("메인 서버 종료")
+        logger.info("✅ ================== END ==================")
     except Exception as e:
         logger.error(f"서버 실행 오류: {e}")
+        logger.info("✅ ================== END ==================")
     finally:
+        logger.info("✅ ================== END ==================")
         shutdown_flag.set()
 
 if __name__ == '__main__':

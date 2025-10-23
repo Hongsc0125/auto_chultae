@@ -359,6 +359,7 @@ def main():
         logger.info("출근 시간대 감지 - 출근 처리 시작")
         db_manager.log_system("INFO", "watchdog", "출근 시간대 감지", stage="schedule_match", action_type="punch_in")
         success = punch_in()
+        logger.info("✅ ================== END ==================")
         sys.exit(0 if success else 1)
 
     # 퇴근 시간: 18:00 ~ 19:00
@@ -366,6 +367,7 @@ def main():
         logger.info("퇴근 시간대 감지 - 퇴근 처리 시작")
         db_manager.log_system("INFO", "watchdog", "퇴근 시간대 감지", stage="schedule_match", action_type="punch_out")
         success = punch_out()
+        logger.info("✅ ================== END ==================")
         sys.exit(0 if success else 1)
 
     # 스케줄 외 시간
@@ -374,9 +376,10 @@ def main():
         db_manager.log_system("INFO", "watchdog",
             f"스케줄 외 시간 ({current_hour:02d}:{current_minute:02d}) - 실행하지 않음",
             stage="schedule_skip")
+            logger.info("✅ ================== END ==================")
         sys.exit(0)
 
-    logger.info("✅ ================== END ==================")
+    
 
 if __name__ == '__main__':
     main()
