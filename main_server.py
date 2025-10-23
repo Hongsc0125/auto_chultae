@@ -916,31 +916,8 @@ def main():
     # 초기 하트비트
     update_server_heartbeat()
 
-    # 서버 시작 시 초기 출근 체크 수행
-    def initial_punch_check():
-        """서버 시작 시 초기 출근 체크"""
-        try:
-            logger.info("🚀 서버 시작 - 초기 출근 체크 수행")
-
-            # 타임아웃과 함께 실행
-            import subprocess
-            result = subprocess.run([
-                "python", "-c", "from auto_chultae import punch_in; punch_in()"
-            ], timeout=300, capture_output=True, text=True)
-
-            if result.returncode == 0:
-                logger.info("✅ 초기 출근 체크 완료")
-            else:
-                logger.error(f"초기 출근 체크 서브프로세스 실패: {result.stderr}")
-
-        except subprocess.TimeoutExpired:
-            logger.error("초기 출근 체크 타임아웃 (300초)")
-        except Exception as e:
-            logger.error(f"❌ 초기 출근 체크 실패: {e}")
-
-    # 별도 스레드에서 초기 출근 체크 실행 (Flask 서버 시작과 병렬)
-    initial_check_thread = threading.Thread(target=initial_punch_check, daemon=True)
-    initial_check_thread.start()
+    # 초기 출근 체크 제거 - 워치독에서 관리함
+    logger.info("🚀 메인 서버 시작 완료")
 
     try:
         # 개발 모드와 프로덕션 모드 구분
