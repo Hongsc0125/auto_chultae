@@ -318,12 +318,7 @@ def punch_out():
     return success
 
 def main():
-    """메인 함수"""
-    if len(sys.argv) < 2:
-        print("사용법: python watchdog_simple.py [punch_in|punch_out]")
-        sys.exit(1)
-
-    command = sys.argv[1]
+    """메인 함수 - 현재 시간에 따라 출근/퇴근 자동 판단"""
 
     # 데이터베이스 연결 테스트
     if not db_manager.test_connection():
@@ -334,16 +329,44 @@ def main():
     logger.info("✅ 데이터베이스 연결 성공")
     db_manager.log_system("INFO", "watchdog", "워치독 시스템 시작 - 데이터베이스 연결 성공", stage="startup")
 
-    if command == "punch_in":
+    # 현재 시간 확인
+    now = datetime.now()
+    current_hour = now.hour
+    current_minute = now.minute
+    weekday = now.weekday()  # 0=월요일, 6=일요일
+
+    logger.info(f"현재 시간: {now.strftime('%Y-%m-%d %H:%M:%S')} (요일: {weekday})")
+    db_manager.log_system("INFO", "watchdog",
+        f"현재 시간 확인 - {now.strftime('%Y-%m-%d %H:%M:%S')} (요일: {weekday})",
+        stage="time_check")
+
+    # 주말 체크 (토요일=5, 일요일=6)
+    if weekday >= 5:
+        logger.info("주말이므로 실행하지 않음")
+        db_manager.log_system("INFO", "watchdog", "주말이므로 실행하지 않음", stage="weekend_skip")
+        sys.exit(0)
+
+    # 출근 시간: 08:00 ~ 08:40
+    if current_hour == 8 and current_minute <= 40:
+        logger.info("출근 시간대 감지 - 출근 처리 시작")
+        db_manager.log_system("INFO", "watchdog", "출근 시간대 감지", stage="schedule_match", action_type="punch_in")
         success = punch_in()
         sys.exit(0 if success else 1)
-    elif command == "punch_out":
+
+    # 퇴근 시간: 18:00 ~ 19:00
+    elif current_hour == 18 or (current_hour == 19 and current_minute == 0):
+        logger.info("퇴근 시간대 감지 - 퇴근 처리 시작")
+        db_manager.log_system("INFO", "watchdog", "퇴근 시간대 감지", stage="schedule_match", action_type="punch_out")
         success = punch_out()
         sys.exit(0 if success else 1)
+
+    # 스케줄 외 시간
     else:
-        logger.error(f"알 수 없는 명령: {command}")
-        print("사용법: python watchdog_simple.py [punch_in|punch_out]")
-        sys.exit(1)
+        logger.info(f"스케줄 외 시간 (현재: {current_hour:02d}:{current_minute:02d}) - 실행하지 않음")
+        db_manager.log_system("INFO", "watchdog",
+            f"스케줄 외 시간 ({current_hour:02d}:{current_minute:02d}) - 실행하지 않음",
+            stage="schedule_skip")
+        sys.exit(0)
 
 if __name__ == '__main__':
     main()

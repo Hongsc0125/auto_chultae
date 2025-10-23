@@ -117,23 +117,11 @@ for i in {1..15}; do
 done
 
 echo ""
-# 인자 확인 (punch_in 또는 punch_out)
-ACTION=$1
-if [ -z "$ACTION" ]; then
-    echo "❌ 사용법: ./start.sh [punch_in|punch_out]"
-    exit 1
-fi
-
-if [ "$ACTION" != "punch_in" ] && [ "$ACTION" != "punch_out" ]; then
-    echo "❌ 오류: punch_in 또는 punch_out만 가능합니다"
-    exit 1
-fi
-
-echo "🕐 출퇴근 처리 실행 중: $ACTION"
-python3 watchdog_simple.py $ACTION
+echo "🕐 출퇴근 처리 실행 중 (시간 자동 감지)"
+python3 watchdog_simple.py
 
 echo ""
-echo "✅ $ACTION 완료"
+echo "✅ 처리 완료"
 echo "   📡 메인 서버 (PID: $MAIN_PID)"
 echo ""
 echo "📁 로그 확인: logs/ 디렉토리"
