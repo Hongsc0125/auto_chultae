@@ -765,21 +765,25 @@ def handle_command():
                 action="punch_in"
             )
 
-            # auto_chultae 모듈 직접 호출
-            try:
-                from auto_chultae import punch_in
-                punch_in()
-                logger.info("출근 처리 완료")
+            # auto_chultae 모듈을 타임아웃과 함께 실행
+            import subprocess
 
+            try:
+                # 300초(5분) 타임아웃으로 punch_in 실행
+                result = subprocess.run([
+                    "python", "-c", "from auto_chultae import punch_in; punch_in()"
+                ], timeout=300, capture_output=True, text=True)
+
+                if result.returncode == 0:
+                    logger.info("출근 처리 서브프로세스 완료")
+                else:
+                    logger.error(f"출근 처리 서브프로세스 실패: {result.stderr}")
+
+            except subprocess.TimeoutExpired:
+                logger.error("출근 처리 타임아웃 (300초) - 프로세스 종료")
+                raise Exception("출근 처리 타임아웃")
             except Exception as e:
-                logger.error(f"출근 처리 오류: {e}")
-                db_manager.log_server_heartbeat(
-                    component="main_server",
-                    status="error",
-                    stage="punch_in_error",
-                    user_id=None,
-                    action="punch_in"
-                )
+                logger.error(f"출근 처리 서브프로세스 오류: {e}")
                 raise e
 
             db_manager.log_server_heartbeat(
@@ -790,6 +794,7 @@ def handle_command():
                 action="punch_in"
             )
 
+            logger.info("출근 처리 완료")
             return jsonify({'status': 'success', 'message': '출근 처리 완료'}), 200
 
         elif command == 'punch_out':
@@ -802,21 +807,25 @@ def handle_command():
                 action="punch_out"
             )
 
-            # auto_chultae 모듈 직접 호출
-            try:
-                from auto_chultae import punch_out
-                punch_out()
-                logger.info("퇴근 처리 완료")
+            # auto_chultae 모듈을 타임아웃과 함께 실행
+            import subprocess
 
+            try:
+                # 300초(5분) 타임아웃으로 punch_out 실행
+                result = subprocess.run([
+                    "python", "-c", "from auto_chultae import punch_out; punch_out()"
+                ], timeout=300, capture_output=True, text=True)
+
+                if result.returncode == 0:
+                    logger.info("퇴근 처리 서브프로세스 완료")
+                else:
+                    logger.error(f"퇴근 처리 서브프로세스 실패: {result.stderr}")
+
+            except subprocess.TimeoutExpired:
+                logger.error("퇴근 처리 타임아웃 (300초) - 프로세스 종료")
+                raise Exception("퇴근 처리 타임아웃")
             except Exception as e:
-                logger.error(f"퇴근 처리 오류: {e}")
-                db_manager.log_server_heartbeat(
-                    component="main_server",
-                    status="error",
-                    stage="punch_out_error",
-                    user_id=None,
-                    action="punch_out"
-                )
+                logger.error(f"퇴근 처리 서브프로세스 오류: {e}")
                 raise e
 
             db_manager.log_server_heartbeat(
@@ -827,6 +836,7 @@ def handle_command():
                 action="punch_out"
             )
 
+            logger.info("퇴근 처리 완료")
             return jsonify({'status': 'success', 'message': '퇴근 처리 완료'}), 200
 
         else:
