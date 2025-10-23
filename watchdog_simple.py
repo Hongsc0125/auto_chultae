@@ -376,7 +376,7 @@ def main():
         db_manager.log_system("INFO", "watchdog",
             f"스케줄 외 시간 ({current_hour:02d}:{current_minute:02d}) - 실행하지 않음",
             stage="schedule_skip")
-            logger.info("✅ ================== END ==================")
+        logger.info("✅ ================== END ==================")
         sys.exit(0)
 
     
