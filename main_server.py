@@ -847,6 +847,7 @@ def handle_command():
 def signal_handler(signum, frame):
     """시그널 핸들러"""
     logger.info("종료 신호 수신")
+    logger.info("=================== 메인 서버 종료 ==================")
     shutdown_flag.set()
 
     # 데이터베이스에 종료 상태 기록
@@ -869,6 +870,7 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
+    logger.info("============================================")
     logger.info("메인 서버 시작 (크롤링 전용)")
 
     # 데이터베이스 연결 테스트

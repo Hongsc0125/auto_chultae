@@ -320,6 +320,20 @@ def punch_out():
 def main():
     """메인 함수 - 현재 시간에 따라 출근/퇴근 자동 판단"""
 
+    import signal
+
+    logger.info("✅ ================== 워치독 시스템 시작 ==================")
+
+    # 시그널 핸들러 설정
+    def signal_handler(signum, frame):
+        logger.info("종료 신호 수신")
+        logger.info("✅ ================== END ==================")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+
     # 데이터베이스 연결 테스트
     if not db_manager.test_connection():
         logger.error("❌ 데이터베이스 연결 실패!")
@@ -361,6 +375,8 @@ def main():
             f"스케줄 외 시간 ({current_hour:02d}:{current_minute:02d}) - 실행하지 않음",
             stage="schedule_skip")
         sys.exit(0)
+
+    logger.info("✅ ================== END ==================")
 
 if __name__ == '__main__':
     main()
