@@ -117,24 +117,19 @@ for i in {1..15}; do
 done
 
 echo ""
-# 인자 확인 (punch_in 또는 punch_out)
-ACTION=$1
-if [ -z "$ACTION" ]; then
-    echo "❌ 사용법: ./start.sh [punch_in|punch_out]"
-    exit 1
-fi
+echo "🕐 워치독 서버 시작 중..."
+echo "   - 스케줄링 및 명령 전송 담당"
+echo "   - 메인 서버와 HTTP 통신"
 
-if [ "$ACTION" != "punch_in" ] && [ "$ACTION" != "punch_out" ]; then
-    echo "❌ 오류: punch_in 또는 punch_out만 가능합니다"
-    exit 1
-fi
-
-echo "🕐 출퇴근 처리 실행 중: $ACTION"
-python3 watchdog_simple.py $ACTION
+# 워치독 서버 백그라운드 실행
+nohup python3 watchdog.py > watchdog.out 2>&1 &
+WATCHDOG_PID=$!
+echo $WATCHDOG_PID > watchdog.pid
 
 echo ""
-echo "✅ $ACTION 완료"
-echo "   📡 메인 서버 (PID: $MAIN_PID)"
+echo "✅ 출근 관리 시스템 시작 완료"
+echo "   📡 메인 서버 (PID: $MAIN_PID) - 크롤링 담당"
+echo "   ⏰ 워치독 서버 (PID: $WATCHDOG_PID) - 스케줄링 담당"
 echo ""
 echo "📁 로그 확인: logs/ 디렉토리"
 echo "🔗 헬스체크: curl http://localhost:9000/api/health"
