@@ -267,6 +267,33 @@ def close_all_popups(page, user_id, action_name):
     except Exception as e:
         logger.warning(f"[{user_id}] [{action_name}] 팝업 처리 중 오류: {e}")
 
+def check_punch_in_completed(page, user_id, action_name, attendance_log_id=None):
+    """출근 완료 상태 확인 함수"""
+    try:
+        # 출근 완료 버튼이 있는지 확인
+        completed_button_selector = 'button[class*="btn_punch_on"][id*="ptlAttendRegist_btn_attn"]'
+
+        update_heartbeat("checking_punch_in_status", user_id, action_name, attendance_log_id)
+        logger.info(f"[{user_id}] [{action_name}] 출근 완료 상태 확인 중...")
+
+        if page.is_visible(completed_button_selector, timeout=30000):
+            button_text = page.text_content(completed_button_selector)
+            logger.info(f"[{user_id}] [{action_name}] 발견된 버튼 텍스트: '{button_text}'")
+
+            if button_text and "출근완료" in button_text:
+                logger.info(f"[{user_id}] [{action_name}] ✅ 출근이 이미 완료되어 있습니다!")
+                update_heartbeat("punch_in_already_completed", user_id, action_name, attendance_log_id)
+                return True
+
+        logger.info(f"[{user_id}] [{action_name}] 출근 완료 버튼을 찾지 못했거나 아직 완료되지 않음")
+        update_heartbeat("punch_in_not_completed_yet", user_id, action_name, attendance_log_id)
+        return False
+
+    except Exception as e:
+        logger.warning(f"[{user_id}] [{action_name}] 출근 완료 상태 확인 실패: {e}")
+        update_heartbeat("punch_in_status_check_failed", user_id, action_name, attendance_log_id)
+        return False
+
 def check_punch_out_completed(page, user_id, action_name, attendance_log_id=None):
     """퇴근 완료 상태 확인 함수"""
     try:
@@ -644,6 +671,13 @@ def login_and_click_button(user_id, password, button_ids, action_name, attendanc
             heartbeat("page_stabilize_wait")
             time.sleep(3)
 
+            # 출근의 경우 먼저 완료 상태 확인
+            if action_name == "punch_in":
+                if check_punch_in_completed(page, user_id, action_name, attendance_log_id):
+                    logger.info(f"[{user_id}] [{action_name}] ✅ 출근이 이미 완료되어 있어 작업을 종료합니다")
+                    heartbeat("process_complete")
+                    return True
+
             # 퇴근의 경우 먼저 완료 상태 확인
             if action_name == "punch_out":
                 if check_punch_out_completed(page, user_id, action_name, attendance_log_id):
@@ -663,6 +697,33 @@ def login_and_click_button(user_id, password, button_ids, action_name, attendanc
             for btn in button_ids:
                 if wait_and_click_button(page, btn, user_id, action_name):
                     clicked = True
+
+                    # 버튼 클릭 후 출근 완료 상태 재확인
+                    if action_name == "punch_in":
+                        time.sleep(2)  # 상태 변경 대기
+                        if check_punch_in_completed(page, user_id, action_name, attendance_log_id):
+                            logger.info(f"[{user_id}] [{action_name}] ✅ 버튼 클릭 후 출근 완료 확인됨")
+                            heartbeat("button_clicked_success")
+                            heartbeat("process_complete")
+                            return True
+                        else:
+                            # 출근 완료가 확인되지 않으면 실패 처리
+                            logger.error(f"[{user_id}] [{action_name}] ❌ 버튼 클릭 후 출근 완료 확인 실패")
+
+                            # 스크린샷 저장
+                            os.makedirs("screenshots", exist_ok=True)
+                            path = f"screenshots/punch_in_verify_failed_{user_id}_{int(time.time())}.png"
+                            page.screenshot(path=path, full_page=True)
+                            logger.error(f"[{user_id}] [{action_name}] 검증 실패 스크린샷 저장: {path}")
+
+                            # 페이지 HTML도 저장
+                            html_path = f"screenshots/punch_in_verify_failed_{user_id}_{int(time.time())}.html"
+                            with open(html_path, 'w', encoding='utf-8') as f:
+                                f.write(page.content())
+                            logger.error(f"[{user_id}] [{action_name}] 페이지 HTML 저장: {html_path}")
+
+                            raise Exception("출근 버튼 클릭 후 출근 완료 상태가 확인되지 않음")
+
                     # 버튼 클릭 후 퇴근 완료 상태 재확인
                     if action_name == "punch_out":
                         time.sleep(2)  # 상태 변경 대기
@@ -671,6 +732,24 @@ def login_and_click_button(user_id, password, button_ids, action_name, attendanc
                             heartbeat("button_clicked_success")
                             heartbeat("process_complete")
                             return True
+                        else:
+                            # 퇴근 완료가 확인되지 않으면 실패 처리
+                            logger.error(f"[{user_id}] [{action_name}] ❌ 버튼 클릭 후 퇴근 완료 확인 실패")
+
+                            # 스크린샷 저장
+                            os.makedirs("screenshots", exist_ok=True)
+                            path = f"screenshots/punch_out_verify_failed_{user_id}_{int(time.time())}.png"
+                            page.screenshot(path=path, full_page=True)
+                            logger.error(f"[{user_id}] [{action_name}] 검증 실패 스크린샷 저장: {path}")
+
+                            # 페이지 HTML도 저장
+                            html_path = f"screenshots/punch_out_verify_failed_{user_id}_{int(time.time())}.html"
+                            with open(html_path, 'w', encoding='utf-8') as f:
+                                f.write(page.content())
+                            logger.error(f"[{user_id}] [{action_name}] 페이지 HTML 저장: {html_path}")
+
+                            raise Exception("퇴근 버튼 클릭 후 퇴근 완료 상태가 확인되지 않음")
+
                     break
 
             if not clicked:
