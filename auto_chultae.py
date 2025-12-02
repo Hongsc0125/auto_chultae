@@ -270,22 +270,39 @@ def close_all_popups(page, user_id, action_name):
 def check_punch_in_completed(page, user_id, action_name, attendance_log_id=None):
     """출근 완료 상태 확인 함수"""
     try:
-        # 출근 완료 버튼이 있는지 확인
-        completed_button_selector = 'button[class*="btn_punch_on"][id*="ptlAttendRegist_btn_attn"]'
-
         update_heartbeat("checking_punch_in_status", user_id, action_name, attendance_log_id)
         logger.info(f"[{user_id}] [{action_name}] 출근 완료 상태 확인 중...")
 
-        if page.is_visible(completed_button_selector, timeout=30000):
-            button_text = page.text_content(completed_button_selector)
-            logger.info(f"[{user_id}] [{action_name}] 발견된 버튼 텍스트: '{button_text}'")
+        completion_selectors = [
+            '#ptlAttendRegist_punch_in .div_punch',
+            '#ptlAttendRegist_time2 .div_punch',
+            'td#ptlAttendRegist_punch_in'
+        ]
 
-            if button_text and "출근완료" in button_text:
-                logger.info(f"[{user_id}] [{action_name}] ✅ 출근이 이미 완료되어 있습니다!")
+        for selector in completion_selectors:
+            try:
+                if not page.is_visible(selector, timeout=5000):
+                    continue
+                text = page.text_content(selector) or ""
+                logger.debug(f"[{user_id}] [{action_name}] 완료 후보 텍스트({selector}): '{text.strip()}'")
+                if "출근완료" in text:
+                    logger.info(f"[{user_id}] [{action_name}] ✅ 출근이 이미 완료되어 있습니다!")
+                    update_heartbeat("punch_in_already_completed", user_id, action_name, attendance_log_id)
+                    return True
+            except Exception:
+                continue
+
+        # table cell class에 complete 표시가 들어오는 경우도 처리
+        try:
+            cell_class = page.get_attribute('#ptlAttendRegist_punch_in', 'class') or ""
+            if 'complete' in cell_class:
+                logger.info(f"[{user_id}] [{action_name}] ✅ 출근 셀 class='{cell_class}' 로 완료 상태 감지")
                 update_heartbeat("punch_in_already_completed", user_id, action_name, attendance_log_id)
                 return True
+        except Exception:
+            pass
 
-        logger.info(f"[{user_id}] [{action_name}] 출근 완료 버튼을 찾지 못했거나 아직 완료되지 않음")
+        logger.info(f"[{user_id}] [{action_name}] 출근 완료 표시를 찾지 못했거나 아직 완료되지 않음")
         update_heartbeat("punch_in_not_completed_yet", user_id, action_name, attendance_log_id)
         return False
 
@@ -297,22 +314,38 @@ def check_punch_in_completed(page, user_id, action_name, attendance_log_id=None)
 def check_punch_out_completed(page, user_id, action_name, attendance_log_id=None):
     """퇴근 완료 상태 확인 함수"""
     try:
-        # 퇴근 완료 버튼이 있는지 확인
-        completed_button_selector = 'button[class*="btn_punch_on"][id*="ptlAttendRegist_btn_lvof2"]'
-
         update_heartbeat("checking_punch_out_status", user_id, action_name, attendance_log_id)
         logger.info(f"[{user_id}] [{action_name}] 퇴근 완료 상태 확인 중...")
 
-        if page.is_visible(completed_button_selector, timeout=5000):
-            button_text = page.text_content(completed_button_selector)
-            logger.info(f"[{user_id}] [{action_name}] 발견된 버튼 텍스트: '{button_text}'")
+        completion_selectors = [
+            'button[class*="btn_punch_on"][id*="ptlAttendRegist_btn_lvof2"]',
+            '#ptlAttendRegist_punch_out .div_punch',
+            '#ptlAttendRegist_time3 .btn_punch_on'
+        ]
 
-            if button_text and "퇴근완료" in button_text:
-                logger.info(f"[{user_id}] [{action_name}] ✅ 퇴근이 이미 완료되어 있습니다!")
+        for selector in completion_selectors:
+            try:
+                if not page.is_visible(selector, timeout=5000):
+                    continue
+                text = page.text_content(selector) or ""
+                logger.debug(f"[{user_id}] [{action_name}] 완료 후보 텍스트({selector}): '{text.strip()}'")
+                if "퇴근완료" in text:
+                    logger.info(f"[{user_id}] [{action_name}] ✅ 퇴근이 이미 완료되어 있습니다!")
+                    update_heartbeat("punch_out_already_completed", user_id, action_name, attendance_log_id)
+                    return True
+            except Exception:
+                continue
+
+        try:
+            cell_class = page.get_attribute('#ptlAttendRegist_punch_out', 'class') or ""
+            if 'complete' in cell_class:
+                logger.info(f"[{user_id}] [{action_name}] ✅ 퇴근 셀 class='{cell_class}' 로 완료 상태 감지")
                 update_heartbeat("punch_out_already_completed", user_id, action_name, attendance_log_id)
                 return True
+        except Exception:
+            pass
 
-        logger.info(f"[{user_id}] [{action_name}] 퇴근 완료 버튼을 찾지 못했거나 아직 완료되지 않음")
+        logger.info(f"[{user_id}] [{action_name}] 퇴근 완료 표시를 찾지 못했거나 아직 완료되지 않음")
         update_heartbeat("punch_out_not_completed_yet", user_id, action_name, attendance_log_id)
         return False
 
@@ -757,25 +790,31 @@ def login_and_click_button(user_id, password, button_ids, action_name, attendanc
                 # 출근완료/퇴근완료 상태 확인
                 try:
                     completion_status = page.evaluate("""() => {
-                        // div.div_punch에서 "출근완료" 또는 "퇴근완료" 텍스트 확인
-                        const punchDiv = document.querySelector('div.div_punch');
-                        if (punchDiv) {
-                            const text = punchDiv.textContent.trim();
-                            if (text === '출근완료' || text === '퇴근완료') {
-                                return text;
-                            }
-                        }
-
-                        // 추가적인 완료 상태 확인
-                        const indicators = [
-                            '#ptlAttendRegist_time2 div.div_punch',
-                            'td#ptlAttendRegist_punch_in',
+                        const selectors = [
+                            '#ptlAttendRegist_punch_in',
+                            '#ptlAttendRegist_punch_out',
+                            '#ptlAttendRegist_time2 .div_punch',
+                            '#ptlAttendRegist_time3 .div_punch',
+                            'div.div_punch',
                             '.attendance-complete'
                         ];
 
-                        for (const selector of indicators) {
+                        for (const selector of selectors) {
                             const el = document.querySelector(selector);
-                            if (el && el.textContent) {
+                            if (!el) {
+                                continue;
+                            }
+
+                            if (el.classList && el.classList.contains('complete')) {
+                                if (el.id && el.id.includes('punch_in')) {
+                                    return '출근완료';
+                                }
+                                if (el.id && el.id.includes('punch_out')) {
+                                    return '퇴근완료';
+                                }
+                            }
+
+                            if (el.textContent) {
                                 const text = el.textContent.trim();
                                 if (text.includes('완료')) {
                                     return text;
