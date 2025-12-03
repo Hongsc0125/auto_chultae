@@ -755,17 +755,31 @@ def login_and_click_button(user_id, password, button_ids, action_name, attendanc
                 if wait_and_click_button(page, btn, user_id, action_name):
                     clicked = True
 
-                    # 버튼 클릭 후 출근 완료 상태 재확인
+                    # 버튼 클릭 후 출근 완료 상태 재확인 (재시도 로직)
                     if action_name == "punch_in":
-                        time.sleep(2)  # 상태 변경 대기
-                        if check_punch_in_completed(page, user_id, action_name, attendance_log_id):
-                            logger.info(f"[{user_id}] [{action_name}] ✅ 버튼 클릭 후 출근 완료 확인됨")
+                        logger.info(f"[{user_id}] [{action_name}] 출근 완료 상태 확인 시작 (최대 15회 재시도, 총 30초)")
+
+                        max_retries = 15
+                        retry_interval = 2
+                        completed = False
+
+                        for retry in range(max_retries):
+                            time.sleep(retry_interval)
+
+                            if check_punch_in_completed(page, user_id, action_name, attendance_log_id):
+                                completed = True
+                                logger.info(f"[{user_id}] [{action_name}] ✅ 버튼 클릭 후 출근 완료 확인됨 (재시도 {retry + 1}/{max_retries})")
+                                break
+                            else:
+                                logger.info(f"[{user_id}] [{action_name}] 출근 완료 대기 중... (재시도 {retry + 1}/{max_retries})")
+
+                        if completed:
                             heartbeat("button_clicked_success")
                             heartbeat("process_complete")
                             return True
                         else:
-                            # 출근 완료가 확인되지 않으면 실패 처리
-                            logger.error(f"[{user_id}] [{action_name}] ❌ 버튼 클릭 후 출근 완료 확인 실패")
+                            # 모든 재시도 후에도 출근 완료가 확인되지 않으면 실패 처리
+                            logger.error(f"[{user_id}] [{action_name}] ❌ 버튼 클릭 후 출근 완료 확인 실패 (최대 재시도 횟수 초과)")
 
                             # 스크린샷 저장
                             os.makedirs("screenshots", exist_ok=True)
@@ -781,17 +795,31 @@ def login_and_click_button(user_id, password, button_ids, action_name, attendanc
 
                             raise Exception("출근 버튼 클릭 후 출근 완료 상태가 확인되지 않음")
 
-                    # 버튼 클릭 후 퇴근 완료 상태 재확인
+                    # 버튼 클릭 후 퇴근 완료 상태 재확인 (재시도 로직)
                     if action_name == "punch_out":
-                        time.sleep(2)  # 상태 변경 대기
-                        if check_punch_out_completed(page, user_id, action_name, attendance_log_id):
-                            logger.info(f"[{user_id}] [{action_name}] ✅ 버튼 클릭 후 퇴근 완료 확인됨")
+                        logger.info(f"[{user_id}] [{action_name}] 퇴근 완료 상태 확인 시작 (최대 15회 재시도, 총 30초)")
+
+                        max_retries = 15
+                        retry_interval = 2
+                        completed = False
+
+                        for retry in range(max_retries):
+                            time.sleep(retry_interval)
+
+                            if check_punch_out_completed(page, user_id, action_name, attendance_log_id):
+                                completed = True
+                                logger.info(f"[{user_id}] [{action_name}] ✅ 버튼 클릭 후 퇴근 완료 확인됨 (재시도 {retry + 1}/{max_retries})")
+                                break
+                            else:
+                                logger.info(f"[{user_id}] [{action_name}] 퇴근 완료 대기 중... (재시도 {retry + 1}/{max_retries})")
+
+                        if completed:
                             heartbeat("button_clicked_success")
                             heartbeat("process_complete")
                             return True
                         else:
-                            # 퇴근 완료가 확인되지 않으면 실패 처리
-                            logger.error(f"[{user_id}] [{action_name}] ❌ 버튼 클릭 후 퇴근 완료 확인 실패")
+                            # 모든 재시도 후에도 퇴근 완료가 확인되지 않으면 실패 처리
+                            logger.error(f"[{user_id}] [{action_name}] ❌ 버튼 클릭 후 퇴근 완료 확인 실패 (최대 재시도 횟수 초과)")
 
                             # 스크린샷 저장
                             os.makedirs("screenshots", exist_ok=True)
