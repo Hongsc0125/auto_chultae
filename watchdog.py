@@ -676,20 +676,23 @@ def execute_punch_in_parallel():
         logger.info("출근 처리가 필요한 사용자 없음")
         return True
 
-    # 각 사용자별로 독립 프로세스 실행
+    # 각 사용자별로 독립 프로세스 실행 (Flask 서버 포함)
     processes = []
+    base_port = 9001  # 메인 백엔드(9000) 다음부터 시작
 
-    for user in users_to_process:
+    for idx, user in enumerate(users_to_process):
         user_id = user["user_id"]
+        port = base_port + idx
 
         cmd = [
             sys.executable,
             "main_server.py",
             "--user", user_id,
-            "--action", "punch_in"
+            "--action", "punch_in",
+            "--port", str(port)
         ]
 
-        logger.info(f"[{user_id}] 출근 프로세스 시작")
+        logger.info(f"[{user_id}] 출근 프로세스 시작 (포트: {port})")
         proc = subprocess.Popen(cmd, cwd=os.getcwd())
         processes.append((user_id, proc))
 
@@ -729,20 +732,23 @@ def execute_punch_out_parallel():
         logger.info("퇴근 처리가 필요한 사용자 없음")
         return True
 
-    # 각 사용자별로 독립 프로세스 실행
+    # 각 사용자별로 독립 프로세스 실행 (Flask 서버 포함)
     processes = []
+    base_port = 9001  # 메인 백엔드(9000) 다음부터 시작
 
-    for user in users_to_process:
+    for idx, user in enumerate(users_to_process):
         user_id = user["user_id"]
+        port = base_port + idx
 
         cmd = [
             sys.executable,
             "main_server.py",
             "--user", user_id,
-            "--action", "punch_out"
+            "--action", "punch_out",
+            "--port", str(port)
         ]
 
-        logger.info(f"[{user_id}] 퇴근 프로세스 시작")
+        logger.info(f"[{user_id}] 퇴근 프로세스 시작 (포트: {port})")
         proc = subprocess.Popen(cmd, cwd=os.getcwd())
         processes.append((user_id, proc))
 

@@ -13,31 +13,29 @@ from dotenv import load_dotenv
 # .env 파일 로드
 load_dotenv()
 
-# 명령줄 인자 확인 - 단일 실행 모드면 Flask 없이 실행
+# 명령줄 인자 확인
 import argparse
 parser = argparse.ArgumentParser(description='Auto Chultae Main Server')
-parser.add_argument('--user', type=str, help='특정 사용자만 처리 (단일 실행 모드)')
+parser.add_argument('--user', type=str, help='특정 사용자만 처리 (단일 사용자 모드)')
 parser.add_argument('--action', type=str, choices=['punch_in', 'punch_out'], help='실행할 액션')
-parser.add_argument('--port', type=int, help='서버 포트')
+parser.add_argument('--port', type=int, help='서버 포트 (단일 사용자 모드에서 사용)')
 args, unknown = parser.parse_known_args()
 
-# 단일 실행 모드 플래그
+# 단일 사용자 모드 플래그
 SINGLE_USER_MODE = args.user and args.action
 
-# Flask 관련 import는 서버 모드에서만 필요
-if not SINGLE_USER_MODE:
-    try:
-        from flask import Flask, request, jsonify, make_response
-        from flask_cors import CORS
-        from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
-        import bcrypt
-        FLASK_AVAILABLE = True
-    except ImportError:
-        FLASK_AVAILABLE = False
+# Flask 관련 import
+try:
+    from flask import Flask, request, jsonify, make_response
+    from flask_cors import CORS
+    from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+    import bcrypt
+    FLASK_AVAILABLE = True
+except ImportError:
+    FLASK_AVAILABLE = False
+    if not SINGLE_USER_MODE:
         print("Flask not available. Server mode disabled.")
         sys.exit(1)
-else:
-    FLASK_AVAILABLE = False
 
 # 나머지 import
 import signal
@@ -967,87 +965,113 @@ def signal_handler(signum, frame):
 
 def main():
     """메인 서버 시작"""
-    import argparse
+    # args는 이미 전역에서 파싱됨
 
-    # 명령줄 인자 파싱
-    parser = argparse.ArgumentParser(description='Auto Chultae Main Server')
-    parser.add_argument('--user', type=str, help='특정 사용자만 처리 (단일 실행 모드)')
-    parser.add_argument('--action', type=str, choices=['punch_in', 'punch_out'], help='실행할 액션')
-    parser.add_argument('--port', type=int, help='서버 포트 (단일 실행 모드에서는 무시됨)')
-    args = parser.parse_args()
-
-    # 단일 실행 모드: 특정 사용자만 처리하고 종료
-    if args.user and args.action:
+    # 단일 사용자 모드: Flask 서버 + 크롤링 백그라운드 실행
+    if SINGLE_USER_MODE and args.port:
         logger.info(f"============================================")
-        logger.info(f"단일 실행 모드: 사용자={args.user}, 액션={args.action}")
+        logger.info(f"단일 사용자 모드: 사용자={args.user}, 액션={args.action}, 포트={args.port}")
 
         # 데이터베이스 연결 테스트
         if not db_manager.test_connection():
             logger.error("데이터베이스 연결 실패!")
             sys.exit(1)
 
-        try:
-            from auto_chultae import login_and_click_button, PUNCH_IN_BUTTON_ID, PUNCH_OUT_BUTTON_IDS, create_attendance_record, update_attendance_record
+        # 크롤링 완료 플래그
+        crawling_done = threading.Event()
+        crawling_success = {'status': None}
 
-            # 사용자 정보 조회
-            session = db_manager.get_session()
+        def run_crawling():
+            """백그라운드에서 크롤링 실행"""
             try:
-                result = session.execute(
-                    text("SELECT user_id, password FROM users WHERE user_id = :user_id AND is_active = true"),
-                    {"user_id": args.user}
-                )
-                user_data = result.fetchone()
+                from auto_chultae import login_and_click_button, PUNCH_IN_BUTTON_ID, PUNCH_OUT_BUTTON_IDS, create_attendance_record, update_attendance_record
 
-                if not user_data:
-                    logger.error(f"활성 사용자를 찾을 수 없음: {args.user}")
-                    sys.exit(1)
+                # 사용자 정보 조회
+                session = db_manager.get_session()
+                try:
+                    result = session.execute(
+                        text("SELECT user_id, password FROM users WHERE user_id = :user_id AND is_active = true"),
+                        {"user_id": args.user}
+                    )
+                    user_data = result.fetchone()
 
-                user_id = user_data.user_id
-                password = user_data.password
+                    if not user_data:
+                        logger.error(f"활성 사용자를 찾을 수 없음: {args.user}")
+                        crawling_success['status'] = 'failed'
+                        crawling_done.set()
+                        return
 
-            finally:
-                session.close()
+                    user_id = user_data.user_id
+                    password = user_data.password
 
-            # 스케줄 및 이력 확인
-            is_workday = db_manager.is_workday_scheduled(user_id)
-            has_success_today = db_manager.has_today_success(user_id, args.action)
+                finally:
+                    session.close()
 
-            if not is_workday and args.action == 'punch_in':
-                logger.info(f"[{user_id}] 오늘은 휴무일 - 종료")
-                sys.exit(0)
+                # 스케줄 및 이력 확인
+                is_workday = db_manager.is_workday_scheduled(user_id)
+                has_success_today = db_manager.has_today_success(user_id, args.action)
 
-            if has_success_today:
-                logger.info(f"[{user_id}] 오늘자 {args.action} 성공 이력 있음 - 종료")
-                sys.exit(0)
+                if not is_workday and args.action == 'punch_in':
+                    logger.info(f"[{user_id}] 오늘은 휴무일 - 종료")
+                    crawling_success['status'] = 'skipped'
+                    crawling_done.set()
+                    return
 
-            # 출석 기록 생성
-            attendance_id = create_attendance_record(user_id, args.action)
-            if not attendance_id:
-                logger.error(f"[{user_id}] 출석 기록 생성 실패")
-                sys.exit(1)
+                if has_success_today:
+                    logger.info(f"[{user_id}] 오늘자 {args.action} 성공 이력 있음 - 종료")
+                    crawling_success['status'] = 'already_done'
+                    crawling_done.set()
+                    return
 
-            # 크롤링 실행
-            button_ids = [PUNCH_IN_BUTTON_ID] if args.action == 'punch_in' else PUNCH_OUT_BUTTON_IDS
+                # 출석 기록 생성
+                attendance_id = create_attendance_record(user_id, args.action)
+                if not attendance_id:
+                    logger.error(f"[{user_id}] 출석 기록 생성 실패")
+                    crawling_success['status'] = 'failed'
+                    crawling_done.set()
+                    return
 
-            try:
-                login_and_click_button(user_id, password, button_ids, args.action, attendance_id)
-                logger.info(f"[{user_id}] {args.action} 성공")
-                update_attendance_record(attendance_id, "success")
-                sys.exit(0)
+                # 크롤링 실행
+                button_ids = [PUNCH_IN_BUTTON_ID] if args.action == 'punch_in' else PUNCH_OUT_BUTTON_IDS
+
+                try:
+                    login_and_click_button(user_id, password, button_ids, args.action, attendance_id)
+                    logger.info(f"[{user_id}] {args.action} 성공")
+                    update_attendance_record(attendance_id, "success")
+                    crawling_success['status'] = 'success'
+
+                except Exception as e:
+                    if "이미" in str(e):
+                        logger.info(f"[{user_id}] {args.action} 이미 완료: {e}")
+                        update_attendance_record(attendance_id, "already_done", str(e))
+                        crawling_success['status'] = 'already_done'
+                    else:
+                        logger.error(f"[{user_id}] {args.action} 실패: {e}")
+                        update_attendance_record(attendance_id, "failed", str(e))
+                        crawling_success['status'] = 'failed'
 
             except Exception as e:
-                if "이미" in str(e):
-                    logger.info(f"[{user_id}] {args.action} 이미 완료: {e}")
-                    update_attendance_record(attendance_id, "already_done", str(e))
-                    sys.exit(0)
-                else:
-                    logger.error(f"[{user_id}] {args.action} 실패: {e}")
-                    update_attendance_record(attendance_id, "failed", str(e))
-                    sys.exit(1)
+                logger.error(f"크롤링 스레드 오류: {e}")
+                crawling_success['status'] = 'failed'
+            finally:
+                crawling_done.set()
+                # 크롤링 완료 후 5초 뒤에 서버 종료
+                time.sleep(5)
+                logger.info(f"크롤링 완료 - 서버 종료")
+                os._exit(0)
 
-        except Exception as e:
-            logger.error(f"단일 실행 모드 오류: {e}")
-            sys.exit(1)
+        # 크롤링 스레드 시작
+        crawling_thread = threading.Thread(target=run_crawling, daemon=True)
+        crawling_thread.start()
+
+        # Flask 서버 시작
+        logger.info(f"Flask 서버 시작: 0.0.0.0:{args.port}")
+
+        try:
+            app.run(host='0.0.0.0', port=args.port, debug=False, use_reloader=False)
+        except KeyboardInterrupt:
+            logger.info("서버 종료")
+            sys.exit(0)
 
     # 일반 서버 모드
     # 시그널 핸들러 설정
