@@ -733,14 +733,14 @@ def login_and_click_button(user_id, password, button_ids, action_name, attendanc
                 if check_punch_in_completed(page, user_id, action_name, attendance_log_id):
                     logger.info(f"[{user_id}] [{action_name}] ✅ 출근이 이미 완료되어 있어 작업을 종료합니다")
                     heartbeat("process_complete")
-                    return True
+                    raise Exception("이미 출근 완료")
 
             # 퇴근의 경우 먼저 완료 상태 확인
             if action_name == "punch_out":
                 if check_punch_out_completed(page, user_id, action_name, attendance_log_id):
                     logger.info(f"[{user_id}] [{action_name}] ✅ 퇴근이 이미 완료되어 있어 작업을 종료합니다")
                     heartbeat("process_complete")
-                    return True
+                    raise Exception("이미 퇴근 완료")
 
             # 모든 팝업 닫기
             heartbeat("popup_close_start")
