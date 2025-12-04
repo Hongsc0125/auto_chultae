@@ -652,15 +652,125 @@ def send_command_to_main_server(command):
         last_command_start_time = None
         return False
 
+def execute_punch_in_parallel():
+    """출근 처리 실행 (사용자별 병렬 프로세스)"""
+    logger.info("출근 처리 시작 - 사용자별 병렬 실행")
+
+    users = get_users()
+    if not users:
+        logger.error("활성 사용자를 찾을 수 없습니다")
+        return False
+
+    # 처리가 필요한 사용자 필터링
+    users_to_process = []
+    for user in users:
+        user_id = user["user_id"]
+        is_workday = db_manager.is_workday_scheduled(user_id)
+        has_success_today = db_manager.has_today_success(user_id, "punch_in")
+
+        if is_workday and not has_success_today:
+            users_to_process.append(user)
+            logger.info(f"[{user_id}] 출근 처리 대상에 추가")
+
+    if not users_to_process:
+        logger.info("출근 처리가 필요한 사용자 없음")
+        return True
+
+    # 각 사용자별로 독립 프로세스 실행
+    processes = []
+    base_port = 9000
+
+    for idx, user in enumerate(users_to_process):
+        user_id = user["user_id"]
+        port = base_port + idx
+
+        cmd = [
+            sys.executable,
+            "main_server.py",
+            "--user", user_id,
+            "--action", "punch_in",
+            "--port", str(port)
+        ]
+
+        logger.info(f"[{user_id}] 출근 프로세스 시작 (포트: {port})")
+        proc = subprocess.Popen(cmd, cwd=os.getcwd())
+        processes.append((user_id, proc))
+
+    # 모든 프로세스 완료 대기
+    all_success = True
+    for user_id, proc in processes:
+        returncode = proc.wait()
+        if returncode == 0:
+            logger.info(f"[{user_id}] 출근 처리 완료 (성공)")
+        else:
+            logger.error(f"[{user_id}] 출근 처리 완료 (실패: exit code {returncode})")
+            all_success = False
+
+    return all_success
+
+def execute_punch_out_parallel():
+    """퇴근 처리 실행 (사용자별 병렬 프로세스)"""
+    logger.info("퇴근 처리 시작 - 사용자별 병렬 실행")
+
+    users = get_users()
+    if not users:
+        logger.error("활성 사용자를 찾을 수 없습니다")
+        return False
+
+    # 처리가 필요한 사용자 필터링
+    users_to_process = []
+    for user in users:
+        user_id = user["user_id"]
+        has_punch_in = db_manager.has_today_success(user_id, "punch_in")
+        has_punch_out = db_manager.has_today_success(user_id, "punch_out")
+
+        if has_punch_in and not has_punch_out:
+            users_to_process.append(user)
+            logger.info(f"[{user_id}] 퇴근 처리 대상에 추가")
+
+    if not users_to_process:
+        logger.info("퇴근 처리가 필요한 사용자 없음")
+        return True
+
+    # 각 사용자별로 독립 프로세스 실행
+    processes = []
+    base_port = 9000
+
+    for idx, user in enumerate(users_to_process):
+        user_id = user["user_id"]
+        port = base_port + idx
+
+        cmd = [
+            sys.executable,
+            "main_server.py",
+            "--user", user_id,
+            "--action", "punch_out",
+            "--port", str(port)
+        ]
+
+        logger.info(f"[{user_id}] 퇴근 프로세스 시작 (포트: {port})")
+        proc = subprocess.Popen(cmd, cwd=os.getcwd())
+        processes.append((user_id, proc))
+
+    # 모든 프로세스 완료 대기
+    all_success = True
+    for user_id, proc in processes:
+        returncode = proc.wait()
+        if returncode == 0:
+            logger.info(f"[{user_id}] 퇴근 처리 완료 (성공)")
+        else:
+            logger.error(f"[{user_id}] 퇴근 처리 완료 (실패: exit code {returncode})")
+            all_success = False
+
+    return all_success
+
 def execute_punch_in():
-    """출근 처리 실행 (메인 서버에 명령 전송)"""
-    logger.info("출근 처리 시작 - 메인 서버에 명령 전송")
-    return send_command_to_main_server("punch_in")
+    """출근 처리 실행 (병렬 모드 사용)"""
+    return execute_punch_in_parallel()
 
 def execute_punch_out():
-    """퇴근 처리 실행 (메인 서버에 명령 전송)"""
-    logger.info("퇴근 처리 시작 - 메인 서버에 명령 전송")
-    return send_command_to_main_server("punch_out")
+    """퇴근 처리 실행 (병렬 모드 사용)"""
+    return execute_punch_out_parallel()
 
 # 스케줄링 함수들
 def punch_in_with_retry():
@@ -891,7 +1001,7 @@ def check_missed_schedules():
                 f"놓친 출근 처리 시도 - 대상 사용자: {users_needing_punch_in}",
                 stage="missed_punch_in_execute", action_type="punch_in")
 
-            success = execute_punch_in()
+            success = execute_punch_in_parallel()
             if success:
                 logger.info("✅ 놓친 출근 처리 성공")
                 db_manager.log_system("INFO", "watchdog",
@@ -931,7 +1041,7 @@ def check_missed_schedules():
                 f"놓친 퇴근 처리 시도 - 대상 사용자: {users_needing_punch_out}",
                 stage="missed_punch_out_execute", action_type="punch_out")
 
-            success = execute_punch_out()
+            success = execute_punch_out_parallel()
             if success:
                 logger.info("✅ 놓친 퇴근 처리 성공")
                 db_manager.log_system("INFO", "watchdog",
@@ -978,18 +1088,17 @@ def main():
             f"놓친 스케줄 확인 예외 발생: {e}",
             stage="startup_missed_check_error")
 
-    # 워치독 시작 시 초기 출근 체크 수행 (강제 실행)
-    logger.info("🚀 워치독 시작 - 초기 출근 체크 수행 (강제)")
+    # 워치독 시작 시 초기 출근 체크 수행 (병렬 실행)
+    logger.info("🚀 워치독 시작 - 초기 출근 체크 수행 (병렬)")
     db_manager.log_system("INFO", "watchdog",
-        "워치독 시작 - 초기 출근 체크 수행 (강제 실행)",
+        "워치독 시작 - 초기 출근 체크 수행 (병렬 실행)",
         stage="initial_startup")
 
     try:
-        # 초기 실행 시에는 사전 체크 무시하고 강제로 Main Server 호출
-        logger.info("초기 출근 처리 시도 시작 (강제 실행)")
-        db_manager.log_system("WARNING", "watchdog",
-            "초기 출근 처리 시도 - 스케줄 체크 및 이력 체크 무시 (강제 실행)",
-            stage="forced_execution", action_type="punch_in")
+        logger.info("초기 출근 처리 시도 시작 (병렬 실행)")
+        db_manager.log_system("INFO", "watchdog",
+            "초기 출근 처리 시도 - 사용자별 병렬 프로세스 실행",
+            stage="parallel_execution", action_type="punch_in")
 
         success = execute_punch_in()
 

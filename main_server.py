@@ -7,21 +7,46 @@ HTTP API를 통해 출퇴근 명령을 받아 처리하는 독립 서버
 import os
 import sys
 import logging
+from datetime import datetime
+from dotenv import load_dotenv
+
+# .env 파일 로드
+load_dotenv()
+
+# 명령줄 인자 확인 - 단일 실행 모드면 Flask 없이 실행
+import argparse
+parser = argparse.ArgumentParser(description='Auto Chultae Main Server')
+parser.add_argument('--user', type=str, help='특정 사용자만 처리 (단일 실행 모드)')
+parser.add_argument('--action', type=str, choices=['punch_in', 'punch_out'], help='실행할 액션')
+parser.add_argument('--port', type=int, help='서버 포트')
+args, unknown = parser.parse_known_args()
+
+# 단일 실행 모드 플래그
+SINGLE_USER_MODE = args.user and args.action
+
+# Flask 관련 import는 서버 모드에서만 필요
+if not SINGLE_USER_MODE:
+    try:
+        from flask import Flask, request, jsonify, make_response
+        from flask_cors import CORS
+        from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+        import bcrypt
+        FLASK_AVAILABLE = True
+    except ImportError:
+        FLASK_AVAILABLE = False
+        print("Flask not available. Server mode disabled.")
+        sys.exit(1)
+else:
+    FLASK_AVAILABLE = False
+
+# 나머지 import
 import signal
 import threading
 import time
 import hashlib
-import bcrypt
-from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, make_response
-from flask_cors import CORS
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
-from dotenv import load_dotenv
+from datetime import timedelta
 from db_manager import db_manager
 from sqlalchemy import text
-
-# .env 파일 로드
-load_dotenv()
 
 # 로깅 설정
 def setup_logging():
@@ -46,42 +71,118 @@ def setup_logging():
 
 logger = setup_logging()
 
-# Flask 앱 생성
-app = Flask(__name__)
+# 단일 사용자 모드면 바로 실행
+if SINGLE_USER_MODE:
+    logger.info("============================================")
+    logger.info(f"단일 실행 모드: 사용자={args.user}, 액션={args.action}")
 
-# CORS 설정 (Vue.js 프론트엔드와 통신용)
-CORS(app,
-     origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:5174"],
-     allow_headers=["Content-Type", "Authorization"],
-     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-     supports_credentials=True)
+    # 데이터베이스 연결 테스트
+    if not db_manager.test_connection():
+        logger.error("데이터베이스 연결 실패!")
+        sys.exit(1)
 
-# CORS Preflight 요청 처리
-@app.before_request
-def handle_preflight():
-    if request.method == "OPTIONS":
-        response = make_response()
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add('Access-Control-Allow-Headers', "*")
-        response.headers.add('Access-Control-Allow-Methods', "*")
-        return response
+    try:
+        from auto_chultae import login_and_click_button, PUNCH_IN_BUTTON_ID, PUNCH_OUT_BUTTON_IDS, create_attendance_record, update_attendance_record
 
-# JWT 설정
-app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key-change-this-in-production')
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=8)
-jwt = JWTManager(app)
+        # 사용자 정보 조회
+        session = db_manager.get_session()
+        try:
+            result = session.execute(
+                text("SELECT user_id, password FROM users WHERE user_id = :user_id AND is_active = true"),
+                {"user_id": args.user}
+            )
+            user_data = result.fetchone()
+
+            if not user_data:
+                logger.error(f"활성 사용자를 찾을 수 없음: {args.user}")
+                sys.exit(1)
+
+            user_id = user_data.user_id
+            password = user_data.password
+
+        finally:
+            session.close()
+
+        # 스케줄 및 이력 확인
+        is_workday = db_manager.is_workday_scheduled(user_id)
+        has_success_today = db_manager.has_today_success(user_id, args.action)
+
+        if not is_workday and args.action == 'punch_in':
+            logger.info(f"[{user_id}] 오늘은 휴무일 - 종료")
+            sys.exit(0)
+
+        if has_success_today:
+            logger.info(f"[{user_id}] 오늘자 {args.action} 성공 이력 있음 - 종료")
+            sys.exit(0)
+
+        # 출석 기록 생성
+        attendance_id = create_attendance_record(user_id, args.action)
+        if not attendance_id:
+            logger.error(f"[{user_id}] 출석 기록 생성 실패")
+            sys.exit(1)
+
+        # 크롤링 실행
+        button_ids = [PUNCH_IN_BUTTON_ID] if args.action == 'punch_in' else PUNCH_OUT_BUTTON_IDS
+
+        try:
+            login_and_click_button(user_id, password, button_ids, args.action, attendance_id)
+            logger.info(f"[{user_id}] {args.action} 성공")
+            update_attendance_record(attendance_id, "success")
+            sys.exit(0)
+
+        except Exception as e:
+            if "이미" in str(e):
+                logger.info(f"[{user_id}] {args.action} 이미 완료: {e}")
+                update_attendance_record(attendance_id, "already_done", str(e))
+                sys.exit(0)
+            else:
+                logger.error(f"[{user_id}] {args.action} 실패: {e}")
+                update_attendance_record(attendance_id, "failed", str(e))
+                sys.exit(1)
+
+    except Exception as e:
+        logger.error(f"단일 실행 모드 오류: {e}")
+        sys.exit(1)
 
 # 전역 변수
 shutdown_flag = threading.Event()
 
-# 웹 API 헬퍼 함수들
-def hash_password(password):
-    """비밀번호 해시화"""
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+# Flask 앱 생성 및 웹 API 설정 (서버 모드에서만)
+if FLASK_AVAILABLE and not SINGLE_USER_MODE:
+    app = Flask(__name__)
 
-def verify_password(password, hashed):
-    """비밀번호 검증"""
-    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+    # CORS 설정 (Vue.js 프론트엔드와 통신용)
+    CORS(app,
+         origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:5174"],
+         allow_headers=["Content-Type", "Authorization"],
+         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+         supports_credentials=True)
+
+    # CORS Preflight 요청 처리
+    @app.before_request
+    def handle_preflight():
+        if request.method == "OPTIONS":
+            response = make_response()
+            response.headers.add("Access-Control-Allow-Origin", "*")
+            response.headers.add('Access-Control-Allow-Headers', "*")
+            response.headers.add('Access-Control-Allow-Methods', "*")
+            return response
+
+    # JWT 설정
+    app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-secret-key-change-this-in-production')
+    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=8)
+    jwt = JWTManager(app)
+
+    # 웹 API 헬퍼 함수들
+    def hash_password(password):
+        """비밀번호 해시화"""
+        return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+    def verify_password(password, hashed):
+        """비밀번호 검증"""
+        return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+else:
+    app = None
 
 def update_server_heartbeat():
     """서버 하트비트 업데이트"""
@@ -866,6 +967,89 @@ def signal_handler(signum, frame):
 
 def main():
     """메인 서버 시작"""
+    import argparse
+
+    # 명령줄 인자 파싱
+    parser = argparse.ArgumentParser(description='Auto Chultae Main Server')
+    parser.add_argument('--user', type=str, help='특정 사용자만 처리 (단일 실행 모드)')
+    parser.add_argument('--action', type=str, choices=['punch_in', 'punch_out'], help='실행할 액션')
+    parser.add_argument('--port', type=int, help='서버 포트 (단일 실행 모드에서는 무시됨)')
+    args = parser.parse_args()
+
+    # 단일 실행 모드: 특정 사용자만 처리하고 종료
+    if args.user and args.action:
+        logger.info(f"============================================")
+        logger.info(f"단일 실행 모드: 사용자={args.user}, 액션={args.action}")
+
+        # 데이터베이스 연결 테스트
+        if not db_manager.test_connection():
+            logger.error("데이터베이스 연결 실패!")
+            sys.exit(1)
+
+        try:
+            from auto_chultae import login_and_click_button, PUNCH_IN_BUTTON_ID, PUNCH_OUT_BUTTON_IDS, create_attendance_record, update_attendance_record
+
+            # 사용자 정보 조회
+            session = db_manager.get_session()
+            try:
+                result = session.execute(
+                    text("SELECT user_id, password FROM users WHERE user_id = :user_id AND is_active = true"),
+                    {"user_id": args.user}
+                )
+                user_data = result.fetchone()
+
+                if not user_data:
+                    logger.error(f"활성 사용자를 찾을 수 없음: {args.user}")
+                    sys.exit(1)
+
+                user_id = user_data.user_id
+                password = user_data.password
+
+            finally:
+                session.close()
+
+            # 스케줄 및 이력 확인
+            is_workday = db_manager.is_workday_scheduled(user_id)
+            has_success_today = db_manager.has_today_success(user_id, args.action)
+
+            if not is_workday and args.action == 'punch_in':
+                logger.info(f"[{user_id}] 오늘은 휴무일 - 종료")
+                sys.exit(0)
+
+            if has_success_today:
+                logger.info(f"[{user_id}] 오늘자 {args.action} 성공 이력 있음 - 종료")
+                sys.exit(0)
+
+            # 출석 기록 생성
+            attendance_id = create_attendance_record(user_id, args.action)
+            if not attendance_id:
+                logger.error(f"[{user_id}] 출석 기록 생성 실패")
+                sys.exit(1)
+
+            # 크롤링 실행
+            button_ids = [PUNCH_IN_BUTTON_ID] if args.action == 'punch_in' else PUNCH_OUT_BUTTON_IDS
+
+            try:
+                login_and_click_button(user_id, password, button_ids, args.action, attendance_id)
+                logger.info(f"[{user_id}] {args.action} 성공")
+                update_attendance_record(attendance_id, "success")
+                sys.exit(0)
+
+            except Exception as e:
+                if "이미" in str(e):
+                    logger.info(f"[{user_id}] {args.action} 이미 완료: {e}")
+                    update_attendance_record(attendance_id, "already_done", str(e))
+                    sys.exit(0)
+                else:
+                    logger.error(f"[{user_id}] {args.action} 실패: {e}")
+                    update_attendance_record(attendance_id, "failed", str(e))
+                    sys.exit(1)
+
+        except Exception as e:
+            logger.error(f"단일 실행 모드 오류: {e}")
+            sys.exit(1)
+
+    # 일반 서버 모드
     # 시그널 핸들러 설정
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
