@@ -117,14 +117,23 @@ for i in {1..15}; do
 done
 
 echo ""
-echo "🕐 출퇴근 처리 실행 중 (시간 자동 감지)"
-python3 watchdog_simple.py
+echo "🕐 워치독 시스템 시작 (사용자별 병렬 처리)"
+echo "   - 출근: 월-금 08:00-08:40 (5분간격)"
+echo "   - 퇴근: 월-금 18:00-19:00 (5분간격)"
+echo "   - 사용자별 독립 프로세스 실행"
+
+# 워치독 백그라운드 실행
+nohup python3 watchdog.py > watchdog.out 2>&1 &
+WATCHDOG_PID=$!
+echo $WATCHDOG_PID > watchdog.pid
 
 echo ""
-echo "✅ 처리 완료"
+echo "✅ 시스템 시작 완료"
 echo "   📡 메인 서버 (PID: $MAIN_PID)"
+echo "   🕐 워치독 (PID: $WATCHDOG_PID)"
 echo ""
 echo "📁 로그 확인: logs/ 디렉토리"
+echo "📊 실시간 로그: tail -f watchdog.out"
 echo "🔗 헬스체크: curl http://localhost:9000/api/health"
 echo "🛑 종료 방법: ./stop.sh 실행"
 echo ""

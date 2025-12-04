@@ -678,21 +678,18 @@ def execute_punch_in_parallel():
 
     # 각 사용자별로 독립 프로세스 실행
     processes = []
-    base_port = 9000
 
-    for idx, user in enumerate(users_to_process):
+    for user in users_to_process:
         user_id = user["user_id"]
-        port = base_port + idx
 
         cmd = [
             sys.executable,
             "main_server.py",
             "--user", user_id,
-            "--action", "punch_in",
-            "--port", str(port)
+            "--action", "punch_in"
         ]
 
-        logger.info(f"[{user_id}] 출근 프로세스 시작 (포트: {port})")
+        logger.info(f"[{user_id}] 출근 프로세스 시작")
         proc = subprocess.Popen(cmd, cwd=os.getcwd())
         processes.append((user_id, proc))
 
@@ -734,21 +731,18 @@ def execute_punch_out_parallel():
 
     # 각 사용자별로 독립 프로세스 실행
     processes = []
-    base_port = 9000
 
-    for idx, user in enumerate(users_to_process):
+    for user in users_to_process:
         user_id = user["user_id"]
-        port = base_port + idx
 
         cmd = [
             sys.executable,
             "main_server.py",
             "--user", user_id,
-            "--action", "punch_out",
-            "--port", str(port)
+            "--action", "punch_out"
         ]
 
-        logger.info(f"[{user_id}] 퇴근 프로세스 시작 (포트: {port})")
+        logger.info(f"[{user_id}] 퇴근 프로세스 시작")
         proc = subprocess.Popen(cmd, cwd=os.getcwd())
         processes.append((user_id, proc))
 
