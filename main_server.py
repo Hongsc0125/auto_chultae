@@ -214,6 +214,10 @@ def register():
         if not all([user_id, password, email]):
             return jsonify({'error': '모든 필드를 입력해주세요'}), 400
 
+        # IP 주소와 User-Agent 가져오기
+        ip_address = request.remote_addr
+        user_agent = request.headers.get('User-Agent')
+
         # 사용자 중복 체크
         session = db_manager.get_session()
         try:
@@ -237,6 +241,20 @@ def register():
                 }
             )
             session.commit()
+
+            # 회원가입 로그 기록
+            db_manager.log_user_change(
+                user_id=user_id,
+                changed_by=user_id,
+                change_type="register",
+                field_name="user_account",
+                old_value=None,
+                new_value=f"user_id: {user_id}, email: {email}",
+                ip_address=ip_address,
+                user_agent=user_agent,
+                notes="신규 회원가입"
+            )
+
             return jsonify({'success': True, 'message': '회원가입이 완료되었습니다'})
 
         finally:
@@ -512,26 +530,104 @@ def update_user_status():
         if is_active is None:
             return jsonify({'error': 'is_active 값이 필요합니다'}), 400
 
-        session = db_manager.get_session()
-        try:
-            result = session.execute(
-                text("UPDATE users SET is_active = :is_active WHERE user_id = :user_id"),
-                {"is_active": is_active, "user_id": current_user}
-            )
+        # IP 주소와 User-Agent 가져오기
+        ip_address = request.remote_addr
+        user_agent = request.headers.get('User-Agent')
 
-            if result.rowcount == 0:
-                return jsonify({'error': '사용자를 찾을 수 없습니다'}), 404
+        # 활성화/비활성화 처리 (로그 기록 포함)
+        if is_active:
+            success = db_manager.activate_user(current_user, changed_by=current_user, ip_address=ip_address, user_agent=user_agent)
+        else:
+            success = db_manager.deactivate_user(current_user, changed_by=current_user, ip_address=ip_address, user_agent=user_agent)
 
-            session.commit()
+        if success:
             logger.info(f"사용자 {current_user} 활성화 상태 변경: {is_active}")
             return jsonify({'success': True, 'message': '상태가 변경되었습니다'})
-
-        finally:
-            session.close()
+        else:
+            return jsonify({'error': '사용자를 찾을 수 없습니다'}), 404
 
     except Exception as e:
         logger.error(f"사용자 상태 변경 오류: {e}")
         return jsonify({'error': '사용자 상태 변경 중 오류가 발생했습니다'}), 500
+
+@app.route('/api/web/user/password', methods=['PUT'])
+@jwt_required()
+def update_password():
+    """비밀번호 변경"""
+    try:
+        current_user = get_jwt_identity()
+        data = request.get_json()
+        current_password = data.get('current_password')
+        new_password = data.get('new_password')
+
+        if not all([current_password, new_password]):
+            return jsonify({'error': '현재 비밀번호와 새 비밀번호를 모두 입력해주세요'}), 400
+
+        # 현재 비밀번호 확인
+        session = db_manager.get_session()
+        try:
+            result = session.execute(
+                text("SELECT password FROM users WHERE user_id = :user_id"),
+                {"user_id": current_user}
+            )
+            user = result.fetchone()
+
+            if not user:
+                return jsonify({'error': '사용자를 찾을 수 없습니다'}), 404
+
+            # 평문 비교 (크롤링 시스템이므로)
+            if user.password != current_password:
+                return jsonify({'error': '현재 비밀번호가 일치하지 않습니다'}), 401
+
+        finally:
+            session.close()
+
+        # IP 주소와 User-Agent 가져오기
+        ip_address = request.remote_addr
+        user_agent = request.headers.get('User-Agent')
+
+        # 비밀번호 업데이트 (로그 기록 포함)
+        if db_manager.update_user_password(current_user, new_password, changed_by=current_user, ip_address=ip_address, user_agent=user_agent):
+            logger.info(f"사용자 {current_user} 비밀번호 변경 완료")
+            return jsonify({'success': True, 'message': '비밀번호가 변경되었습니다'})
+        else:
+            return jsonify({'error': '비밀번호 변경에 실패했습니다'}), 500
+
+    except Exception as e:
+        logger.error(f"비밀번호 변경 오류: {e}")
+        return jsonify({'error': '비밀번호 변경 중 오류가 발생했습니다'}), 500
+
+@app.route('/api/web/user/change-logs', methods=['GET'])
+@jwt_required()
+def get_change_logs():
+    """사용자 변경 로그 조회"""
+    try:
+        current_user = get_jwt_identity()
+        limit = request.args.get('limit', 50, type=int)
+
+        # 사용자 변경 로그 조회
+        logs = db_manager.get_user_change_logs(current_user, limit=limit)
+
+        log_list = []
+        for log in logs:
+            log_list.append({
+                'id': log.id,
+                'user_id': log.user_id,
+                'changed_by': log.changed_by,
+                'change_type': log.change_type,
+                'field_name': log.field_name,
+                'old_value': log.old_value if log.field_name != 'password' else '***',  # 비밀번호는 숨김
+                'new_value': log.new_value if log.field_name != 'password' else '***',  # 비밀번호는 숨김
+                'changed_at': log.changed_at.isoformat(),
+                'ip_address': log.ip_address,
+                'notes': log.notes
+            })
+
+        return jsonify({'success': True, 'logs': log_list})
+
+    except Exception as e:
+        logger.error(f"변경 로그 조회 오류: {e}")
+        return jsonify({'error': '변경 로그 조회 중 오류가 발생했습니다'}), 500
 
 @app.route('/api/web/user/delete', methods=['DELETE'])
 @jwt_required()
@@ -539,6 +635,24 @@ def delete_user_account():
     """사용자 계정 완전 삭제"""
     try:
         current_user = get_jwt_identity()
+
+        # IP 주소와 User-Agent 가져오기
+        ip_address = request.remote_addr
+        user_agent = request.headers.get('User-Agent')
+
+        # 삭제 전 로그 기록 (삭제되기 전에 기록)
+        db_manager.log_user_change(
+            user_id=current_user,
+            changed_by=current_user,
+            change_type="delete_account",
+            field_name="user_account",
+            old_value=current_user,
+            new_value=None,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            notes="계정 완전 삭제 요청"
+        )
+
         session = db_manager.get_session()
         try:
             # 1. 하트비트 로그 삭제
@@ -553,7 +667,7 @@ def delete_user_account():
                 {"user_id": current_user}
             )
 
-            # 3. 사용자 계정 삭제
+            # 3. 사용자 계정 삭제 (user_change_logs는 FK CASCADE로 자동 삭제됨)
             result = session.execute(
                 text("DELETE FROM users WHERE user_id = :user_id"),
                 {"user_id": current_user}

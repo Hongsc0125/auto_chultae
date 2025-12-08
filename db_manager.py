@@ -361,8 +361,8 @@ class DatabaseManager:
         """새 사용자 추가 (중복 체크 포함)"""
         return self.insert_user(user_id, password)
 
-    def deactivate_user(self, user_id):
-        """사용자 비활성화"""
+    def deactivate_user(self, user_id, changed_by=None, ip_address=None, user_agent=None):
+        """사용자 비활성화 (로그 기록 포함)"""
         session = self.get_session()
         try:
             result = session.execute(
@@ -373,6 +373,18 @@ class DatabaseManager:
 
             if result.rowcount > 0:
                 logger.info(f"사용자 {user_id} 비활성화 완료")
+
+                # 변경 로그 기록
+                self.log_user_change(
+                    user_id=user_id,
+                    changed_by=changed_by or user_id,
+                    change_type="deactivate",
+                    field_name="is_active",
+                    old_value="true",
+                    new_value="false",
+                    ip_address=ip_address,
+                    user_agent=user_agent
+                )
                 return True
             else:
                 logger.warning(f"사용자 {user_id}를 찾을 수 없습니다")
@@ -385,8 +397,8 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def activate_user(self, user_id):
-        """사용자 활성화"""
+    def activate_user(self, user_id, changed_by=None, ip_address=None, user_agent=None):
+        """사용자 활성화 (로그 기록 포함)"""
         session = self.get_session()
         try:
             result = session.execute(
@@ -397,6 +409,18 @@ class DatabaseManager:
 
             if result.rowcount > 0:
                 logger.info(f"사용자 {user_id} 활성화 완료")
+
+                # 변경 로그 기록
+                self.log_user_change(
+                    user_id=user_id,
+                    changed_by=changed_by or user_id,
+                    change_type="activate",
+                    field_name="is_active",
+                    old_value="false",
+                    new_value="true",
+                    ip_address=ip_address,
+                    user_agent=user_agent
+                )
                 return True
             else:
                 logger.warning(f"사용자 {user_id}를 찾을 수 없습니다")
@@ -409,10 +433,80 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def update_user_password(self, user_id, new_password):
-        """사용자 비밀번호 업데이트"""
+    def log_user_change(self, user_id, changed_by, change_type, field_name=None, old_value=None, new_value=None, ip_address=None, user_agent=None, notes=None):
+        """사용자 변경 로그 기록"""
         session = self.get_session()
         try:
+            session.execute(
+                text("""
+                    INSERT INTO user_change_logs
+                    (user_id, changed_by, change_type, field_name, old_value, new_value, changed_at, ip_address, user_agent, notes)
+                    VALUES (:user_id, :changed_by, :change_type, :field_name, :old_value, :new_value, :changed_at, :ip_address, :user_agent, :notes)
+                """),
+                {
+                    "user_id": user_id,
+                    "changed_by": changed_by,
+                    "change_type": change_type,
+                    "field_name": field_name,
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "changed_at": datetime.now(),
+                    "ip_address": ip_address,
+                    "user_agent": user_agent,
+                    "notes": notes
+                }
+            )
+            session.commit()
+            logger.debug(f"사용자 변경 로그 기록: {user_id} - {change_type}")
+            return True
+
+        except SQLAlchemyError as e:
+            session.rollback()
+            logger.error(f"사용자 변경 로그 기록 실패: {e}")
+            return False
+        finally:
+            session.close()
+
+    def get_user_change_logs(self, user_id, limit=50):
+        """특정 사용자의 변경 로그 조회"""
+        session = self.get_session()
+        try:
+            result = session.execute(
+                text("""
+                    SELECT id, user_id, changed_by, change_type, field_name, old_value, new_value, changed_at, ip_address, user_agent, notes
+                    FROM user_change_logs
+                    WHERE user_id = :user_id
+                    ORDER BY changed_at DESC
+                    LIMIT :limit
+                """),
+                {"user_id": user_id, "limit": limit}
+            )
+            return result.fetchall()
+
+        except SQLAlchemyError as e:
+            logger.error(f"사용자 변경 로그 조회 실패: {e}")
+            return []
+        finally:
+            session.close()
+
+    def update_user_password(self, user_id, new_password, changed_by=None, ip_address=None, user_agent=None):
+        """사용자 비밀번호 업데이트 (로그 기록 포함)"""
+        session = self.get_session()
+        try:
+            # 기존 비밀번호 조회
+            result = session.execute(
+                text("SELECT password FROM users WHERE user_id = :user_id"),
+                {"user_id": user_id}
+            )
+            user = result.fetchone()
+
+            if not user:
+                logger.warning(f"사용자 {user_id}를 찾을 수 없습니다")
+                return False
+
+            old_password = user.password
+
+            # 비밀번호 업데이트
             result = session.execute(
                 text("UPDATE users SET password = :password, updated_at = :updated_at WHERE user_id = :user_id"),
                 {"user_id": user_id, "password": new_password, "updated_at": datetime.now()}
@@ -421,9 +515,20 @@ class DatabaseManager:
 
             if result.rowcount > 0:
                 logger.info(f"사용자 {user_id} 비밀번호 업데이트 완료")
+
+                # 변경 로그 기록
+                self.log_user_change(
+                    user_id=user_id,
+                    changed_by=changed_by or user_id,
+                    change_type="password_change",
+                    field_name="password",
+                    old_value=old_password,  # 평문 저장 (크롤링 시스템이므로)
+                    new_value=new_password,  # 평문 저장 (크롤링 시스템이므로)
+                    ip_address=ip_address,
+                    user_agent=user_agent
+                )
                 return True
             else:
-                logger.warning(f"사용자 {user_id}를 찾을 수 없습니다")
                 return False
 
         except SQLAlchemyError as e:
