@@ -220,12 +220,17 @@ def check_password_error_popup(page, user_id):
 
                 // 비밀번호 오류 관련 키워드 검사
                 const errorKeywords = [
+                    '로그인 정보가 일치하지 않습니다',  // 일반 로그인 실패
+                    '로그인 정보',
+                    '일치하지 않습니다',
                     '비밀번호 입력 오류',
                     '비밀번호 오류',
                     '입력오류',
                     '로그인이 자동 차단',
                     '비밀번호가 일치하지 않습니다',
-                    '비밀번호를 확인해주세요'
+                    '비밀번호를 확인해주세요',
+                    '로그인 실패',
+                    '인증 실패'
                 ];
 
                 for (const keyword of errorKeywords) {
@@ -749,9 +754,9 @@ def login_and_click_button(user_id, password, button_ids, action_name, attendanc
                 page.click("button[type=submit]")
                 logger.info(f"[{user_id}] [{action_name}] 로그인 버튼 클릭 완료")
 
-                # 로그인 버튼 클릭 후 비밀번호 오류 팝업 검사 (5초 대기)
-                logger.info(f"[{user_id}] [{action_name}] 비밀번호 오류 팝업 검사 대기 중 (5초)...")
-                time.sleep(5)
+                # 로그인 버튼 클릭 후 비밀번호 오류 팝업 검사 (3초 대기)
+                logger.info(f"[{user_id}] [{action_name}] 비밀번호 오류 팝업 검사 대기 중 (3초)...")
+                time.sleep(3)
 
                 # 비밀번호 오류 팝업 검사
                 heartbeat("password_error_check")
@@ -780,7 +785,7 @@ def login_and_click_button(user_id, password, button_ids, action_name, attendanc
                     # 예외 발생 (크롤링 중단)
                     raise Exception(f"비밀번호 불일치: {error_message}")
 
-                logger.info(f"[{user_id}] [{action_name}] 비밀번호 정상 - 계속 진행")
+                logger.info(f"[{user_id}] [{action_name}] 비밀번호 오류 팝업 없음 - 계속 진행")
 
                 # 로그인 완료 대기
                 logger.info(f"[{user_id}] [{action_name}] 메인 페이지 이동 대기 중...")
@@ -790,15 +795,38 @@ def login_and_click_button(user_id, password, button_ids, action_name, attendanc
 
                 # 메인 페이지 이동 대기 (Playwright 자체 타임아웃 사용)
                 try:
-                    page.wait_for_url("**/homGwMain", timeout=120000)  # 120초 타임아웃
+                    page.wait_for_url("**/homGwMain", timeout=30000)  # 30초로 단축
                     logger.info(f"[{user_id}] [{action_name}] 메인 페이지 이동 완료")
 
                     # 메인 페이지 이동 완료 하트비트
                     heartbeat("main_page_loaded")
 
                 except Exception as e:
-                    logger.error(f"[{user_id}] [{action_name}] 메인 페이지 이동 타임아웃: {e}")
-                    raise e
+                    logger.error(f"[{user_id}] [{action_name}] 메인 페이지 이동 실패 - 비밀번호 오류 재검사")
+
+                    # 메인 페이지 이동 실패 시 다시 한번 팝업 검사
+                    heartbeat("password_error_recheck")
+                    password_error, error_message = check_password_error_popup(page, user_id)
+
+                    if password_error:
+                        # 비밀번호 불일치 상태로 설정
+                        logger.error(f"[{user_id}] [{action_name}] 재검사에서 비밀번호 오류 감지")
+
+                        # 스크린샷 저장
+                        os.makedirs("screenshots", exist_ok=True)
+                        error_screenshot_path = f"screenshots/password_error_{user_id}_{int(time.time())}.png"
+                        page.screenshot(path=error_screenshot_path, full_page=True)
+                        logger.error(f"[{user_id}] [{action_name}] 비밀번호 오류 스크린샷 저장: {error_screenshot_path}")
+
+                        # 데이터베이스에 비밀번호 불일치 상태 기록
+                        db_manager.set_password_mismatch(user_id, changed_by="system")
+
+                        # 예외 발생 (크롤링 중단)
+                        raise Exception(f"비밀번호 불일치: {error_message}")
+                    else:
+                        # 팝업도 없으면 다른 오류
+                        logger.error(f"[{user_id}] [{action_name}] 메인 페이지 이동 타임아웃 (비밀번호 오류 아님): {e}")
+                        raise e
                 
                 logger.info(f"[{user_id}] [{action_name}] 페이지 로드 상태 대기 중...")
 
