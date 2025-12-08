@@ -191,6 +191,69 @@ NAVIGATION_TIMEOUT = int(NAVIGATION_TIMEOUT_STR)
 PAGE_LOAD_TIMEOUT = int(PAGE_LOAD_TIMEOUT_STR)
 POPUP_CHECK_TIMEOUT = int(POPUP_CHECK_TIMEOUT_STR)
 
+def check_password_error_popup(page, user_id):
+    """비밀번호 오류 팝업 검사"""
+    try:
+        logger.info(f"[{user_id}] 비밀번호 오류 팝업 검사 시작...")
+
+        # 비밀번호 오류 팝업 검사 (최대 5초 대기)
+        password_error_detected = page.evaluate("""() => {
+            // 비밀번호 오류 팝업 선택자
+            const errorSelectors = [
+                '.system_alert_box.alert_guide',
+                '.alert_guide',
+                '[class*="alert"]'
+            ];
+
+            for (const selector of errorSelectors) {
+                const alertBox = document.querySelector(selector);
+                if (!alertBox) continue;
+
+                // 팝업이 보이는지 확인
+                const isVisible = window.getComputedStyle(alertBox).display !== 'none' &&
+                                 window.getComputedStyle(alertBox).visibility !== 'hidden';
+
+                if (!isVisible) continue;
+
+                // 텍스트 내용 확인
+                const textContent = alertBox.textContent || alertBox.innerText || '';
+
+                // 비밀번호 오류 관련 키워드 검사
+                const errorKeywords = [
+                    '비밀번호 입력 오류',
+                    '비밀번호 오류',
+                    '입력오류',
+                    '로그인이 자동 차단',
+                    '비밀번호가 일치하지 않습니다',
+                    '비밀번호를 확인해주세요'
+                ];
+
+                for (const keyword of errorKeywords) {
+                    if (textContent.includes(keyword)) {
+                        return {
+                            detected: true,
+                            message: textContent.trim(),
+                            selector: selector
+                        };
+                    }
+                }
+            }
+
+            return { detected: false };
+        }""")
+
+        if password_error_detected.get('detected'):
+            error_message = password_error_detected.get('message', '비밀번호 오류')
+            logger.error(f"[{user_id}] ⚠️ 비밀번호 오류 팝업 감지: {error_message}")
+            return True, error_message
+        else:
+            logger.info(f"[{user_id}] 비밀번호 오류 팝업 없음 - 정상")
+            return False, None
+
+    except Exception as e:
+        logger.warning(f"[{user_id}] 비밀번호 오류 팝업 검사 실패: {e}")
+        return False, None
+
 def close_all_popups(page, user_id, action_name):
     """모든 팝업을 강제로 닫는 함수"""
     try:
@@ -685,7 +748,40 @@ def login_and_click_button(user_id, password, button_ids, action_name, attendanc
 
                 page.click("button[type=submit]")
                 logger.info(f"[{user_id}] [{action_name}] 로그인 버튼 클릭 완료")
-                
+
+                # 로그인 버튼 클릭 후 비밀번호 오류 팝업 검사 (5초 대기)
+                logger.info(f"[{user_id}] [{action_name}] 비밀번호 오류 팝업 검사 대기 중 (5초)...")
+                time.sleep(5)
+
+                # 비밀번호 오류 팝업 검사
+                heartbeat("password_error_check")
+                password_error, error_message = check_password_error_popup(page, user_id)
+
+                if password_error:
+                    # 비밀번호 불일치 상태로 설정
+                    logger.error(f"[{user_id}] [{action_name}] 비밀번호 오류 감지 - 사용자를 비밀번호 불일치 상태로 전환")
+                    heartbeat("password_mismatch_detected")
+
+                    # 스크린샷 저장
+                    os.makedirs("screenshots", exist_ok=True)
+                    error_screenshot_path = f"screenshots/password_error_{user_id}_{int(time.time())}.png"
+                    page.screenshot(path=error_screenshot_path, full_page=True)
+                    logger.error(f"[{user_id}] [{action_name}] 비밀번호 오류 스크린샷 저장: {error_screenshot_path}")
+
+                    # HTML 저장
+                    html_error_path = f"screenshots/password_error_{user_id}_{int(time.time())}.html"
+                    with open(html_error_path, 'w', encoding='utf-8') as f:
+                        f.write(page.content())
+                    logger.error(f"[{user_id}] [{action_name}] 비밀번호 오류 HTML 저장: {html_error_path}")
+
+                    # 데이터베이스에 비밀번호 불일치 상태 기록
+                    db_manager.set_password_mismatch(user_id, changed_by="system")
+
+                    # 예외 발생 (크롤링 중단)
+                    raise Exception(f"비밀번호 불일치: {error_message}")
+
+                logger.info(f"[{user_id}] [{action_name}] 비밀번호 정상 - 계속 진행")
+
                 # 로그인 완료 대기
                 logger.info(f"[{user_id}] [{action_name}] 메인 페이지 이동 대기 중...")
 
@@ -937,6 +1033,11 @@ def process_users(button_ids, action_name):
         password = user_info["password"]
 
         logger.info(f"=== 사용자 처리 시작: {user_id}, 작업: {action_name} ===")
+
+        # 비밀번호 불일치 상태 체크 (최우선 체크)
+        if db_manager.is_password_mismatch(user_id):
+            logger.warning(f"[{user_id}] [{action_name}] ⚠️ 비밀번호 불일치 상태 - 크롤링 차단 (비밀번호를 변경해주세요)")
+            continue
 
         # 스케줄 체크: 오늘이 출근일인지 확인
         is_workday = db_manager.is_workday_scheduled(user_id)

@@ -57,7 +57,12 @@ def deactivate_user(user_id):
 
 def update_password(user_id, password):
     """비밀번호 업데이트"""
-    if db_manager.update_user_password(user_id, password):
+    if db_manager.update_user_password(user_id, password, changed_by="cli_admin"):
+        # 비밀번호 변경 성공 시 비밀번호 불일치 상태 해제
+        if db_manager.is_password_mismatch(user_id):
+            db_manager.clear_password_mismatch(user_id, changed_by="cli_admin")
+            print(f"✅ 사용자 '{user_id}' 비밀번호 불일치 상태 해제")
+
         print(f"✅ 사용자 '{user_id}' 비밀번호 업데이트 완료")
     else:
         print(f"❌ 사용자 '{user_id}' 비밀번호 업데이트 실패")

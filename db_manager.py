@@ -569,6 +569,120 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def set_password_mismatch(self, user_id, changed_by=None, ip_address=None, user_agent=None):
+        """사용자를 비밀번호 불일치 상태로 설정"""
+        session = self.get_session()
+        try:
+            result = session.execute(
+                text("""
+                    UPDATE users
+                    SET password_mismatch = true,
+                        password_mismatch_at = :mismatch_at,
+                        updated_at = :updated_at
+                    WHERE user_id = :user_id
+                """),
+                {
+                    "user_id": user_id,
+                    "mismatch_at": datetime.now(),
+                    "updated_at": datetime.now()
+                }
+            )
+            session.commit()
+
+            if result.rowcount > 0:
+                logger.warning(f"사용자 {user_id} 비밀번호 불일치 상태로 설정")
+
+                # 변경 로그 기록
+                self.log_user_change(
+                    user_id=user_id,
+                    changed_by=changed_by or "system",
+                    change_type="password_mismatch_detected",
+                    field_name="password_mismatch",
+                    old_value="false",
+                    new_value="true",
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    notes="크롤링 중 비밀번호 오류 팝업 감지"
+                )
+                return True
+            else:
+                logger.warning(f"사용자 {user_id}를 찾을 수 없습니다")
+                return False
+
+        except SQLAlchemyError as e:
+            session.rollback()
+            logger.error(f"비밀번호 불일치 상태 설정 실패: {e}")
+            return False
+        finally:
+            session.close()
+
+    def clear_password_mismatch(self, user_id, changed_by=None, ip_address=None, user_agent=None):
+        """사용자의 비밀번호 불일치 상태 해제"""
+        session = self.get_session()
+        try:
+            result = session.execute(
+                text("""
+                    UPDATE users
+                    SET password_mismatch = false,
+                        password_mismatch_at = NULL,
+                        updated_at = :updated_at
+                    WHERE user_id = :user_id
+                """),
+                {
+                    "user_id": user_id,
+                    "updated_at": datetime.now()
+                }
+            )
+            session.commit()
+
+            if result.rowcount > 0:
+                logger.info(f"사용자 {user_id} 비밀번호 불일치 상태 해제")
+
+                # 변경 로그 기록
+                self.log_user_change(
+                    user_id=user_id,
+                    changed_by=changed_by or user_id,
+                    change_type="password_mismatch_cleared",
+                    field_name="password_mismatch",
+                    old_value="true",
+                    new_value="false",
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    notes="비밀번호 변경으로 불일치 상태 해제"
+                )
+                return True
+            else:
+                logger.warning(f"사용자 {user_id}를 찾을 수 없습니다")
+                return False
+
+        except SQLAlchemyError as e:
+            session.rollback()
+            logger.error(f"비밀번호 불일치 상태 해제 실패: {e}")
+            return False
+        finally:
+            session.close()
+
+    def is_password_mismatch(self, user_id):
+        """사용자의 비밀번호 불일치 상태 확인"""
+        session = self.get_session()
+        try:
+            result = session.execute(
+                text("SELECT password_mismatch FROM users WHERE user_id = :user_id"),
+                {"user_id": user_id}
+            )
+            user = result.fetchone()
+
+            if not user:
+                return False
+
+            return user.password_mismatch if user.password_mismatch is not None else False
+
+        except SQLAlchemyError as e:
+            logger.error(f"비밀번호 불일치 상태 확인 실패: {e}")
+            return False
+        finally:
+            session.close()
+
     def update_heartbeat(self, component, status, message=None):
         """서버 하트비트 업데이트 (server_heartbeat 테이블 사용)"""
         session = self.get_session()

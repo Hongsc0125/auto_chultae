@@ -101,6 +101,11 @@ if SINGLE_USER_MODE:
         finally:
             session.close()
 
+        # 비밀번호 불일치 상태 체크 (최우선)
+        if db_manager.is_password_mismatch(user_id):
+            logger.warning(f"[{user_id}] ⚠️ 비밀번호 불일치 상태 - 크롤링 차단 (비밀번호를 변경해주세요)")
+            sys.exit(1)
+
         # 스케줄 및 이력 확인
         is_workday = db_manager.is_workday_scheduled(user_id)
         has_success_today = db_manager.has_today_success(user_id, args.action)
@@ -588,6 +593,11 @@ def update_password():
 
         # 비밀번호 업데이트 (로그 기록 포함)
         if db_manager.update_user_password(current_user, new_password, changed_by=current_user, ip_address=ip_address, user_agent=user_agent):
+            # 비밀번호 변경 성공 시 비밀번호 불일치 상태 해제
+            if db_manager.is_password_mismatch(current_user):
+                db_manager.clear_password_mismatch(current_user, changed_by=current_user, ip_address=ip_address, user_agent=user_agent)
+                logger.info(f"사용자 {current_user} 비밀번호 불일치 상태 해제")
+
             logger.info(f"사용자 {current_user} 비밀번호 변경 완료")
             return jsonify({'success': True, 'message': '비밀번호가 변경되었습니다'})
         else:
@@ -1120,6 +1130,13 @@ def main():
 
                 finally:
                     session.close()
+
+                # 비밀번호 불일치 상태 체크 (최우선)
+                if db_manager.is_password_mismatch(user_id):
+                    logger.warning(f"[{user_id}] ⚠️ 비밀번호 불일치 상태 - 크롤링 차단")
+                    crawling_success['status'] = 'password_mismatch'
+                    crawling_done.set()
+                    return
 
                 # 스케줄 및 이력 확인
                 is_workday = db_manager.is_workday_scheduled(user_id)
