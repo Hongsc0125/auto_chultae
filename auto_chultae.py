@@ -191,12 +191,12 @@ NAVIGATION_TIMEOUT = int(NAVIGATION_TIMEOUT_STR)
 PAGE_LOAD_TIMEOUT = int(PAGE_LOAD_TIMEOUT_STR)
 POPUP_CHECK_TIMEOUT = int(POPUP_CHECK_TIMEOUT_STR)
 
-def check_password_error_popup(page, user_id):
-    """비밀번호 오류 팝업 검사"""
+def check_password_error_popup(page, user_id, timeout_ms=10000):
+    """비밀번호 오류 팝업 검사 (프록시 환경 고려)"""
     try:
-        logger.info(f"[{user_id}] 비밀번호 오류 팝업 검사 시작...")
+        logger.info(f"[{user_id}] 비밀번호 오류 팝업 검사 시작 (타임아웃: {timeout_ms}ms, 프록시 환경)...")
 
-        # 비밀번호 오류 팝업 검사 (최대 5초 대기)
+        # 비밀번호 오류 팝업 검사 (기본 5초, 조정 가능)
         password_error_detected = page.evaluate("""() => {
             // 비밀번호 오류 팝업 선택자
             const errorSelectors = [
@@ -793,40 +793,59 @@ def login_and_click_button(user_id, password, button_ids, action_name, attendanc
                 # 메인 페이지 이동 대기 시작 하트비트
                 heartbeat("main_page_wait")
 
-                # 메인 페이지 이동 대기 (Playwright 자체 타임아웃 사용)
+                # 메인 페이지 이동 대기 (프록시 + 해외 서버 환경 고려하여 타임아웃 증가)
                 try:
-                    page.wait_for_url("**/homGwMain", timeout=30000)  # 30초로 단축
+                    page.wait_for_url("**/homGwMain", timeout=60000)  # 프록시 경유로 60초로 증가
                     logger.info(f"[{user_id}] [{action_name}] 메인 페이지 이동 완료")
 
                     # 메인 페이지 이동 완료 하트비트
                     heartbeat("main_page_loaded")
 
                 except Exception as e:
-                    logger.error(f"[{user_id}] [{action_name}] 메인 페이지 이동 실패 - 비밀번호 오류 재검사")
+                    # 현재 URL 확인 (프록시로 인해 패턴 매칭 실패 가능)
+                    current_url = page.url
+                    logger.warning(f"[{user_id}] [{action_name}] wait_for_url 타임아웃 - 현재 URL: {current_url}")
 
-                    # 메인 페이지 이동 실패 시 다시 한번 팝업 검사
-                    heartbeat("password_error_recheck")
-                    password_error, error_message = check_password_error_popup(page, user_id)
-
-                    if password_error:
-                        # 비밀번호 불일치 상태로 설정
-                        logger.error(f"[{user_id}] [{action_name}] 재검사에서 비밀번호 오류 감지")
-
-                        # 스크린샷 저장
-                        os.makedirs("screenshots", exist_ok=True)
-                        error_screenshot_path = f"screenshots/password_error_{user_id}_{int(time.time())}.png"
-                        page.screenshot(path=error_screenshot_path, full_page=True)
-                        logger.error(f"[{user_id}] [{action_name}] 비밀번호 오류 스크린샷 저장: {error_screenshot_path}")
-
-                        # 데이터베이스에 비밀번호 불일치 상태 기록
-                        db_manager.set_password_mismatch(user_id, changed_by="system")
-
-                        # 예외 발생 (크롤링 중단)
-                        raise Exception(f"비밀번호 불일치: {error_message}")
+                    # URL에 homGwMain이 포함되어 있으면 성공으로 간주 (패턴 매칭 실패해도 URL은 정상)
+                    if "homGwMain" in current_url:
+                        logger.info(f"[{user_id}] [{action_name}] URL 패턴 매칭 실패했지만 현재 URL에 homGwMain 포함 - 정상 처리")
+                        heartbeat("main_page_loaded")
                     else:
-                        # 팝업도 없으면 다른 오류
-                        logger.error(f"[{user_id}] [{action_name}] 메인 페이지 이동 타임아웃 (비밀번호 오류 아님): {e}")
-                        raise e
+                        # homGwMain이 없으면 비밀번호 오류 재검사 (프록시로 인한 지연 고려)
+                        logger.error(f"[{user_id}] [{action_name}] 메인 페이지 이동 실패 - 비밀번호 오류 재검사")
+
+                        # 메인 페이지 이동 실패 시 다시 한번 팝업 검사
+                        heartbeat("password_error_recheck")
+
+                        # 비밀번호 오류 팝업 검사 (기본 타임아웃 사용, 프록시 환경 고려)
+                        try:
+                            password_error, error_message = check_password_error_popup(page, user_id)
+
+                            if password_error:
+                                # 비밀번호 불일치 상태로 설정
+                                logger.error(f"[{user_id}] [{action_name}] 재검사에서 비밀번호 오류 감지")
+
+                                # 스크린샷 저장
+                                os.makedirs("screenshots", exist_ok=True)
+                                error_screenshot_path = f"screenshots/password_error_{user_id}_{int(time.time())}.png"
+                                page.screenshot(path=error_screenshot_path, full_page=True)
+                                logger.error(f"[{user_id}] [{action_name}] 비밀번호 오류 스크린샷 저장: {error_screenshot_path}")
+
+                                # 데이터베이스에 비밀번호 불일치 상태 기록
+                                db_manager.set_password_mismatch(user_id, changed_by="system")
+
+                                # 예외 발생 (크롤링 중단)
+                                raise Exception(f"비밀번호 불일치: {error_message}")
+                            else:
+                                # 팝업도 없으면 다른 오류
+                                logger.error(f"[{user_id}] [{action_name}] 메인 페이지 이동 타임아웃 (비밀번호 오류 아님): {e}")
+                                raise e
+                        except Exception as check_error:
+                            # check_password_error_popup 자체가 타임아웃되면 무시하고 진행
+                            logger.warning(f"[{user_id}] [{action_name}] 비밀번호 팝업 검사 실패 (프록시로 인한 타임아웃 가능성): {check_error}")
+                            logger.info(f"[{user_id}] [{action_name}] 팝업 검사 실패했으나 계속 진행")
+                            # 원래 에러 다시 발생
+                            raise e
                 
                 logger.info(f"[{user_id}] [{action_name}] 페이지 로드 상태 대기 중...")
 
