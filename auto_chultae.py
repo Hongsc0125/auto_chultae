@@ -902,6 +902,18 @@ def login_and_click_button(user_id, password, button_ids, action_name, attendanc
                     if action_name == "punch_in":
                         logger.info(f"[{user_id}] [{action_name}] 출근 완료 상태 확인 시작 (최대 15회 재시도, 총 30초)")
 
+                        # 먼저 알림 팝업의 확인 버튼을 클릭 시도
+                        time.sleep(1)
+                        try:
+                            alert_confirm = page.locator("#naon-cmm-alert-confirm")
+                            if alert_confirm.is_visible(timeout=3000):
+                                logger.info(f"[{user_id}] [{action_name}] '출근했습니다' 알림 팝업 감지, 확인 버튼 클릭 중...")
+                                alert_confirm.click(timeout=3000)
+                                time.sleep(2)  # 팝업 닫힌 후 페이지 업데이트 대기
+                                logger.info(f"[{user_id}] [{action_name}] 알림 팝업 확인 버튼 클릭 완료")
+                        except Exception as e:
+                            logger.info(f"[{user_id}] [{action_name}] 알림 팝업 없음 또는 이미 닫힘: {e}")
+
                         max_retries = 15
                         retry_interval = 2
                         completed = False
@@ -941,6 +953,18 @@ def login_and_click_button(user_id, password, button_ids, action_name, attendanc
                     # 버튼 클릭 후 퇴근 완료 상태 재확인 (재시도 로직)
                     if action_name == "punch_out":
                         logger.info(f"[{user_id}] [{action_name}] 퇴근 완료 상태 확인 시작 (최대 15회 재시도, 총 30초)")
+
+                        # 먼저 알림 팝업의 확인 버튼을 클릭 시도
+                        time.sleep(1)
+                        try:
+                            alert_confirm = page.locator("#naon-cmm-alert-confirm")
+                            if alert_confirm.is_visible(timeout=3000):
+                                logger.info(f"[{user_id}] [{action_name}] '퇴근했습니다' 알림 팝업 감지, 확인 버튼 클릭 중...")
+                                alert_confirm.click(timeout=3000)
+                                time.sleep(2)  # 팝업 닫힌 후 페이지 업데이트 대기
+                                logger.info(f"[{user_id}] [{action_name}] 알림 팝업 확인 버튼 클릭 완료")
+                        except Exception as e:
+                            logger.info(f"[{user_id}] [{action_name}] 알림 팝업 없음 또는 이미 닫힘: {e}")
 
                         max_retries = 15
                         retry_interval = 2
