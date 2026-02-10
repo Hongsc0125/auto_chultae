@@ -336,39 +336,49 @@ def close_all_popups(page, user_id, action_name):
         logger.warning(f"[{user_id}] [{action_name}] 팝업 처리 중 오류: {e}")
 
 def check_punch_in_completed(page, user_id, action_name, attendance_log_id=None):
-    """출근 완료 상태 확인 함수 - button_click_start 내부 로직과 동일"""
+    """출근 완료 상태 확인 함수 - 출근 영역에서만 정확히 확인"""
     try:
         update_heartbeat("checking_punch_in_status", user_id, action_name, attendance_log_id)
         logger.info(f"[{user_id}] [{action_name}] 출근 완료 상태 확인 중...")
 
-        # JavaScript로 출근 완료 상태 확인 (788-833행 로직과 동일)
+        # JavaScript로 출근 완료 상태 확인 - 출근 영역(#ptlAttendRegist_punch_in)에서만 확인
         completion_status = page.evaluate("""() => {
-            const selectors = [
-                '#ptlAttendRegist_punch_in',
-                '#ptlAttendRegist_time2 .div_punch',
-                'td#ptlAttendRegist_punch_in',
-                '#ptlAttendRegist_punch_in .div_punch',
-                'div.div_punch'
-            ];
+            // 1. 출근 영역의 complete 클래스 확인 (가장 확실한 방법)
+            const punchInTd = document.querySelector('#ptlAttendRegist_punch_in');
+            if (punchInTd && punchInTd.classList.contains('complete')) {
+                return '출근완료';
+            }
 
-            for (const selector of selectors) {
-                const el = document.querySelector(selector);
-                if (!el) {
-                    continue;
+            // 2. 출근 영역 내의 div_punch에서 '출근완료' 텍스트 확인
+            const punchInDivPunch = document.querySelector('#ptlAttendRegist_punch_in .div_punch');
+            if (punchInDivPunch) {
+                const text = punchInDivPunch.textContent.trim();
+                if (text.includes('출근완료') || text.includes('출근 완료')) {
+                    return text;
                 }
+            }
 
-                // 1. class에 'complete'가 있는지 확인
-                if (el.classList && el.classList.contains('complete')) {
-                    if (el.id && el.id.includes('punch_in')) {
-                        return '출근완료';
+            // 3. time2 영역에서 출근 시간과 완료 텍스트 확인
+            const time2Box = document.querySelector('#ptlAttendRegist_time2');
+            if (time2Box) {
+                const divPunch = time2Box.querySelector('.div_punch');
+                if (divPunch) {
+                    const text = divPunch.textContent.trim();
+                    if (text.includes('출근완료') || text.includes('출근 완료')) {
+                        return text;
                     }
                 }
-
-                // 2. textContent에 '완료'가 포함되어 있는지 확인
-                if (el.textContent) {
-                    const text = el.textContent.trim();
-                    if (text.includes('완료')) {
-                        return text;
+                // 출근 시간이 표시되어 있는지 확인
+                const attnTime = document.querySelector('#ptlAttendRegist_attn_time');
+                if (attnTime) {
+                    const timeText = attnTime.textContent.trim();
+                    // 실제 시간이 표시되어 있으면 (HH:MM 형식)
+                    if (timeText && /^[0-9]{2}:[0-9]{2}$/.test(timeText)) {
+                        // 출근 버튼이 비활성화되어 있는지 확인
+                        const attnBtn = document.querySelector('#ptlAttendRegist_btn_attn');
+                        if (attnBtn && attnBtn.disabled) {
+                            return '출근완료 (시간표시: ' + timeText + ')';
+                        }
                     }
                 }
             }
@@ -391,39 +401,46 @@ def check_punch_in_completed(page, user_id, action_name, attendance_log_id=None)
         return False
 
 def check_punch_out_completed(page, user_id, action_name, attendance_log_id=None):
-    """퇴근 완료 상태 확인 함수 - button_click_start 내부 로직과 동일"""
+    """퇴근 완료 상태 확인 함수 - 퇴근 영역에서만 정확히 확인"""
     try:
         update_heartbeat("checking_punch_out_status", user_id, action_name, attendance_log_id)
         logger.info(f"[{user_id}] [{action_name}] 퇴근 완료 상태 확인 중...")
 
-        # JavaScript로 퇴근 완료 상태 확인 (788-833행 로직과 동일)
+        # JavaScript로 퇴근 완료 상태 확인 - 퇴근 영역(#ptlAttendRegist_punch_out)에서만 확인
         completion_status = page.evaluate("""() => {
-            const selectors = [
-                '#ptlAttendRegist_punch_out',
-                '#ptlAttendRegist_time3 .div_punch',
-                'button[class*="btn_punch_on"][id*="ptlAttendRegist_btn_lvof2"]',
-                '#ptlAttendRegist_punch_out .div_punch',
-                '#ptlAttendRegist_time3 .btn_punch_on',
-                'div.div_punch'
-            ];
+            // 1. 퇴근 영역의 complete 클래스 확인 (가장 확실한 방법)
+            const punchOutTd = document.querySelector('#ptlAttendRegist_punch_out');
+            if (punchOutTd && punchOutTd.classList.contains('complete')) {
+                return '퇴근완료';
+            }
 
-            for (const selector of selectors) {
-                const el = document.querySelector(selector);
-                if (!el) {
-                    continue;
+            // 2. 퇴근 영역 내의 div_punch에서 '퇴근완료' 텍스트 확인
+            const punchOutDivPunch = document.querySelector('#ptlAttendRegist_punch_out .div_punch');
+            if (punchOutDivPunch) {
+                const text = punchOutDivPunch.textContent.trim();
+                if (text.includes('퇴근완료') || text.includes('퇴근 완료')) {
+                    return text;
                 }
+            }
 
-                // 1. class에 'complete'가 있는지 확인
-                if (el.classList && el.classList.contains('complete')) {
-                    if (el.id && el.id.includes('punch_out')) {
-                        return '퇴근완료';
-                    }
+            // 3. 퇴근 시간이 표시되어 있으면 완료로 판단 (버튼 상태 무관)
+            //    실제 DOM: <span id="ptlAttendRegist_lvof_time">18:01</span>
+            //    퇴근 완료 시 시간이 표시되지만 complete 클래스나 버튼 disabled는 적용되지 않음
+            const lvofTime = document.querySelector('#ptlAttendRegist_lvof_time');
+            if (lvofTime) {
+                const timeText = lvofTime.textContent.trim();
+                if (timeText && timeText !== '--:--:--' && timeText !== '--:--' && /^[0-9]{1,2}:[0-9]{2}/.test(timeText)) {
+                    return '퇴근완료 (시간표시: ' + timeText + ')';
                 }
+            }
 
-                // 2. textContent에 '완료'가 포함되어 있는지 확인
-                if (el.textContent) {
-                    const text = el.textContent.trim();
-                    if (text.includes('완료')) {
+            // 4. time4 영역에서 퇴근 시간 확인
+            const time4Box = document.querySelector('#ptlAttendRegist_time4');
+            if (time4Box) {
+                const punchDiv = time4Box.querySelector('.div_punch');
+                if (punchDiv) {
+                    const text = punchDiv.textContent.trim();
+                    if (text.includes('퇴근완료') || text.includes('퇴근 완료')) {
                         return text;
                     }
                 }
@@ -900,22 +917,40 @@ def login_and_click_button(user_id, password, button_ids, action_name, attendanc
 
                     # 버튼 클릭 후 출근 완료 상태 재확인 (재시도 로직)
                     if action_name == "punch_in":
-                        logger.info(f"[{user_id}] [{action_name}] 출근 완료 상태 확인 시작 (최대 15회 재시도, 총 30초)")
+                        logger.info(f"[{user_id}] [{action_name}] 출근 완료 상태 확인 시작 (프록시 환경 대응)")
+
+                        # 버튼 클릭 후 네트워크 안정화 대기 (프록시 경유로 서버 응답 지연 대응)
+                        try:
+                            page.wait_for_load_state("networkidle", timeout=15000)
+                            logger.info(f"[{user_id}] [{action_name}] 네트워크 안정화 완료")
+                        except Exception as e:
+                            logger.info(f"[{user_id}] [{action_name}] 네트워크 안정화 대기 타임아웃 (계속 진행): {e}")
 
                         # 먼저 알림 팝업의 확인 버튼을 클릭 시도
-                        time.sleep(1)
+                        # '출근했습니다' 팝업이 뜨면 서버에서 출근 처리가 완료된 것이므로 성공 확정
+                        alert_popup_confirmed = False
+                        time.sleep(2)
                         try:
                             alert_confirm = page.locator("#naon-cmm-alert-confirm")
-                            if alert_confirm.is_visible(timeout=3000):
+                            if alert_confirm.is_visible(timeout=10000):
                                 logger.info(f"[{user_id}] [{action_name}] '출근했습니다' 알림 팝업 감지, 확인 버튼 클릭 중...")
-                                alert_confirm.click(timeout=3000)
-                                time.sleep(2)  # 팝업 닫힌 후 페이지 업데이트 대기
-                                logger.info(f"[{user_id}] [{action_name}] 알림 팝업 확인 버튼 클릭 완료")
+                                alert_confirm.click(timeout=5000)
+                                alert_popup_confirmed = True
+                                time.sleep(1)
+                                logger.info(f"[{user_id}] [{action_name}] 알림 팝업 확인 버튼 클릭 완료 - 출근 성공 확정")
                         except Exception as e:
                             logger.info(f"[{user_id}] [{action_name}] 알림 팝업 없음 또는 이미 닫힘: {e}")
 
-                        max_retries = 15
-                        retry_interval = 2
+                        # 알림 팝업이 확인되었으면 DOM 검증 없이 즉시 성공 처리
+                        if alert_popup_confirmed:
+                            logger.info(f"[{user_id}] [{action_name}] ✅ 알림 팝업으로 출근 완료 확인됨 (DOM 검증 생략)")
+                            heartbeat("button_clicked_success")
+                            heartbeat("process_complete")
+                            return True
+
+                        # 알림 팝업이 없었던 경우 DOM 검증 수행 (최대 5회, 각 3초)
+                        max_retries = 5
+                        retry_interval = 3
                         completed = False
 
                         for retry in range(max_retries):
@@ -928,13 +963,29 @@ def login_and_click_button(user_id, password, button_ids, action_name, attendanc
                             else:
                                 logger.info(f"[{user_id}] [{action_name}] 출근 완료 대기 중... (재시도 {retry + 1}/{max_retries})")
 
+                        # DOM 검증 실패 시 페이지 새로고침 후 최종 재확인
+                        if not completed:
+                            logger.info(f"[{user_id}] [{action_name}] DOM 검증 실패 - 페이지 새로고침 후 최종 재확인")
+                            heartbeat("punch_in_reload_verify")
+                            try:
+                                page.reload(timeout=PAGE_LOAD_TIMEOUT, wait_until="load")
+                                time.sleep(3)
+                                close_all_popups(page, user_id, action_name)
+                                time.sleep(2)
+
+                                if check_punch_in_completed(page, user_id, action_name, attendance_log_id):
+                                    completed = True
+                                    logger.info(f"[{user_id}] [{action_name}] ✅ 페이지 새로고침 후 출근 완료 확인됨!")
+                            except Exception as reload_e:
+                                logger.warning(f"[{user_id}] [{action_name}] 페이지 새로고침 실패: {reload_e}")
+
                         if completed:
                             heartbeat("button_clicked_success")
                             heartbeat("process_complete")
                             return True
                         else:
-                            # 모든 재시도 후에도 출근 완료가 확인되지 않으면 실패 처리
-                            logger.error(f"[{user_id}] [{action_name}] ❌ 버튼 클릭 후 출근 완료 확인 실패 (최대 재시도 횟수 초과)")
+                            # 최종 실패
+                            logger.error(f"[{user_id}] [{action_name}] ❌ 버튼 클릭 후 출근 완료 확인 실패 (새로고침 후에도 미확인)")
 
                             # 스크린샷 저장
                             os.makedirs("screenshots", exist_ok=True)
@@ -952,22 +1003,40 @@ def login_and_click_button(user_id, password, button_ids, action_name, attendanc
 
                     # 버튼 클릭 후 퇴근 완료 상태 재확인 (재시도 로직)
                     if action_name == "punch_out":
-                        logger.info(f"[{user_id}] [{action_name}] 퇴근 완료 상태 확인 시작 (최대 15회 재시도, 총 30초)")
+                        logger.info(f"[{user_id}] [{action_name}] 퇴근 완료 상태 확인 시작 (프록시 환경 대응)")
+
+                        # 버튼 클릭 후 네트워크 안정화 대기 (프록시 경유로 서버 응답 지연 대응)
+                        try:
+                            page.wait_for_load_state("networkidle", timeout=15000)
+                            logger.info(f"[{user_id}] [{action_name}] 네트워크 안정화 완료")
+                        except Exception as e:
+                            logger.info(f"[{user_id}] [{action_name}] 네트워크 안정화 대기 타임아웃 (계속 진행): {e}")
 
                         # 먼저 알림 팝업의 확인 버튼을 클릭 시도
-                        time.sleep(1)
+                        # '퇴근했습니다' 팝업이 뜨면 서버에서 퇴근 처리가 완료된 것이므로 성공 확정
+                        alert_popup_confirmed = False
+                        time.sleep(2)
                         try:
                             alert_confirm = page.locator("#naon-cmm-alert-confirm")
-                            if alert_confirm.is_visible(timeout=3000):
+                            if alert_confirm.is_visible(timeout=10000):
                                 logger.info(f"[{user_id}] [{action_name}] '퇴근했습니다' 알림 팝업 감지, 확인 버튼 클릭 중...")
-                                alert_confirm.click(timeout=3000)
-                                time.sleep(2)  # 팝업 닫힌 후 페이지 업데이트 대기
-                                logger.info(f"[{user_id}] [{action_name}] 알림 팝업 확인 버튼 클릭 완료")
+                                alert_confirm.click(timeout=5000)
+                                alert_popup_confirmed = True
+                                time.sleep(1)
+                                logger.info(f"[{user_id}] [{action_name}] 알림 팝업 확인 버튼 클릭 완료 - 퇴근 성공 확정")
                         except Exception as e:
                             logger.info(f"[{user_id}] [{action_name}] 알림 팝업 없음 또는 이미 닫힘: {e}")
 
-                        max_retries = 15
-                        retry_interval = 2
+                        # 알림 팝업이 확인되었으면 DOM 검증 없이 즉시 성공 처리
+                        if alert_popup_confirmed:
+                            logger.info(f"[{user_id}] [{action_name}] ✅ 알림 팝업으로 퇴근 완료 확인됨 (DOM 검증 생략)")
+                            heartbeat("button_clicked_success")
+                            heartbeat("process_complete")
+                            return True
+
+                        # 알림 팝업이 없었던 경우 DOM 검증 수행 (최대 5회, 각 3초)
+                        max_retries = 5
+                        retry_interval = 3
                         completed = False
 
                         for retry in range(max_retries):
@@ -980,13 +1049,29 @@ def login_and_click_button(user_id, password, button_ids, action_name, attendanc
                             else:
                                 logger.info(f"[{user_id}] [{action_name}] 퇴근 완료 대기 중... (재시도 {retry + 1}/{max_retries})")
 
+                        # DOM 검증 실패 시 페이지 새로고침 후 최종 재확인
+                        if not completed:
+                            logger.info(f"[{user_id}] [{action_name}] DOM 검증 실패 - 페이지 새로고침 후 최종 재확인")
+                            heartbeat("punch_out_reload_verify")
+                            try:
+                                page.reload(timeout=PAGE_LOAD_TIMEOUT, wait_until="load")
+                                time.sleep(3)
+                                close_all_popups(page, user_id, action_name)
+                                time.sleep(2)
+
+                                if check_punch_out_completed(page, user_id, action_name, attendance_log_id):
+                                    completed = True
+                                    logger.info(f"[{user_id}] [{action_name}] ✅ 페이지 새로고침 후 퇴근 완료 확인됨!")
+                            except Exception as reload_e:
+                                logger.warning(f"[{user_id}] [{action_name}] 페이지 새로고침 실패: {reload_e}")
+
                         if completed:
                             heartbeat("button_clicked_success")
                             heartbeat("process_complete")
                             return True
                         else:
-                            # 모든 재시도 후에도 퇴근 완료가 확인되지 않으면 실패 처리
-                            logger.error(f"[{user_id}] [{action_name}] ❌ 버튼 클릭 후 퇴근 완료 확인 실패 (최대 재시도 횟수 초과)")
+                            # 최종 실패
+                            logger.error(f"[{user_id}] [{action_name}] ❌ 버튼 클릭 후 퇴근 완료 확인 실패 (새로고침 후에도 미확인)")
 
                             # 스크린샷 저장
                             os.makedirs("screenshots", exist_ok=True)
@@ -1006,47 +1091,16 @@ def login_and_click_button(user_id, password, button_ids, action_name, attendanc
 
             if not clicked:
                 # 마지막으로 이미 처리된 상태인지 다시 확인
-                # 출근완료/퇴근완료 상태 확인
+                # 해당 action에 맞는 영역에서만 확인
                 try:
-                    completion_status = page.evaluate("""() => {
-                        const selectors = [
-                            '#ptlAttendRegist_punch_in',
-                            '#ptlAttendRegist_punch_out',
-                            '#ptlAttendRegist_time2 .div_punch',
-                            '#ptlAttendRegist_time3 .div_punch',
-                            'div.div_punch',
-                            '.attendance-complete'
-                        ];
-
-                        for (const selector of selectors) {
-                            const el = document.querySelector(selector);
-                            if (!el) {
-                                continue;
-                            }
-
-                            if (el.classList && el.classList.contains('complete')) {
-                                if (el.id && el.id.includes('punch_in')) {
-                                    return '출근완료';
-                                }
-                                if (el.id && el.id.includes('punch_out')) {
-                                    return '퇴근완료';
-                                }
-                            }
-
-                            if (el.textContent) {
-                                const text = el.textContent.trim();
-                                if (text.includes('완료')) {
-                                    return text;
-                                }
-                            }
-                        }
-
-                        return null;
-                    }""")
-
-                    if completion_status:
-                        logger.info(f"[{user_id}] [{action_name}] 이미 {completion_status} 상태임")
-                        raise Exception(f"이미 {completion_status}")
+                    if action_name == "punch_in":
+                        # 출근 영역에서만 확인
+                        if check_punch_in_completed(page, user_id, action_name, attendance_log_id):
+                            raise Exception("이미 출근완료")
+                    elif action_name == "punch_out":
+                        # 퇴근 영역에서만 확인
+                        if check_punch_out_completed(page, user_id, action_name, attendance_log_id):
+                            raise Exception("이미 퇴근완료")
                 except Exception as e:
                     if "이미" in str(e):
                         raise e

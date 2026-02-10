@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m py_compile:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(./stop.sh)",
+      "Bash(./start.sh:*)",
+      "Bash(find:*)",
+      "Bash(source .venv/bin/activate)",
+      "Bash(python3:*)",
+      "Bash(grep:*)",
+      "Bash(timeout 5 bash -c 'echo > /dev/tcp/46.250.250.135/5444')",
+      "Bash(dpkg:*)",
+      "Bash(systemctl list-unit-files:*)",
+      "Bash(pg_lsclusters:*)",
+      "Bash(systemctl status:*)",
+      "Bash(pg_ctlcluster:*)",
+      "Bash(systemctl start:*)",
+      "Bash(ss:*)",
+      "Bash(journalctl:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
